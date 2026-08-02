@@ -73,8 +73,12 @@ resolved_extensions="$(podman exec "$CONTAINER_NAME" \
     cat /opt/code-server-defaults/vsix/resolved-extensions.txt)"
 language_pack="$(printf '%s\n' "$resolved_extensions" |
     grep -Ei '^MS-CEINTL\.vscode-language-pack-ja@[A-Za-z0-9._-]+$')"
+clangd_extension="$(printf '%s\n' "$resolved_extensions" |
+    grep -Ei '^llvm-vs-code-extensions\.vscode-clangd@[A-Za-z0-9._-]+$')"
 [ "$(printf '%s\n' "$language_pack" | wc -l)" -eq 1 ]
+[ "$(printf '%s\n' "$clangd_extension" | wc -l)" -eq 1 ]
 printf '%s\n' "$extensions" | grep -Fqix "$language_pack"
+printf '%s\n' "$extensions" | grep -Fqix "$clangd_extension"
 printf '%s\n' "$extensions" | grep -Fqix 'ms-vscode.cpptools-themes@2.0.0'
 printf '%s\n' "$resolved_extensions" | grep -Fqix 'ms-vscode.cpptools-themes@2.0.0'
 podman exec "$CONTAINER_NAME" sh -lc \
@@ -95,9 +99,11 @@ fi
 podman exec "$CONTAINER_NAME" sh -lc \
     "clang-format --version | grep -F 'clang-format version 22.1.4' >/dev/null"
 podman exec "$CONTAINER_NAME" command -v git-clang-format >/dev/null
-if podman exec "$CONTAINER_NAME" command -v clangd >/dev/null 2>&1; then
-    echo 'Error: clangd was unexpectedly added to the image.' >&2
-    exit 1
-fi
+podman exec "$CONTAINER_NAME" sh -lc '
+    [ "$(command -v clangd)" = /usr/local/bin/clangd ]
+    clangd --version | grep -F "clangd version 22.1.0" >/dev/null
+    printf "int main(void) { return 0; }\n" > /tmp/clangd-smoke.c
+    clangd --check=/tmp/clangd-smoke.c >/tmp/clangd-smoke.log 2>&1
+'
 
 echo 'code-server defaults verification: PASS'

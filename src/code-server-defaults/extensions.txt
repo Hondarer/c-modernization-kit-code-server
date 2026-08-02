@@ -1,3 +1,18 @@
 # One extension per line. Version is optional and resolved during image build.
 MS-CEINTL.vscode-language-pack-ja
 ms-vscode.cpptools-themes@2.0.0
+davidanson.vscode-markdownlint
+editorconfig.editorconfig
+hediet.vscode-drawio
+jebbs.plantuml
+llvm-vs-code-extensions.vscode-clangd
+marp-team.marp-vscode
+ms-python.debugpy
+ms-python.python
+ms-python.vscode-python-envs
+ms-vscode.cmake-tools
+ms-vscode.hexeditor
+ms-vscode.makefile-tools
+redhat.vscode-yaml
+shd101wyy.markdown-preview-enhanced
+wayou.vscode-todo-highlight

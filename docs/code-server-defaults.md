@@ -44,6 +44,28 @@ ms-vscode.cpptools-themes@2.0.0
 
 `Visual Studio Dark - C++`は`ms-vscode.cpptools-themes`が提供します。
 
+## clangd
+
+C/C++の補完、診断、定義参照を提供するため、次の2要素をイメージへ同梱します。
+
+- x86_64向け公式standalone版`clangd 22.1.0`
+- 初期拡張`llvm-vs-code-extensions.vscode-clangd`
+
+clangd archiveはversionとSHA-256を`src/Dockerfile`で固定し、
+`/opt/clangd-22.1.0`へ展開します。`/usr/local/bin/clangd`から実行でき、拡張機能が起動時に
+clangdをダウンロードする必要はありません。公式Linux standalone版の対象に合わせ、完成
+イメージはx86_64限定です。
+
+ベースイメージの`clang-format 22.1.4`と`git-clang-format`はそのまま維持します。clangdと
+clang-formatは同じLLVM 22系列ですが、patch versionはそれぞれ22.1.0と22.1.4です。
+
+clangdに実際のbuild optionを認識させるには、対象プロジェクトで`compile_commands.json`を
+生成します。CMakeでは、例えば次のように生成できます。
+
+```bash
+cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+```
+
 ## buildと起動
 
 `build-pod.sh`は公開ベースイメージ
@@ -86,7 +108,8 @@ Docker buildでは次を行います。
 - 初期拡張の追加・削除・version変更: `src/code-server-defaults/extensions.txt`
 
 変更後はイメージを再buildします。初期化処理自体の仕様を変更しない限り、runtime scriptの
-変更は不要です。
+変更は不要です。clangdのように拡張機能が利用するOS toolを追加・更新する場合は、これに
+加えて`src/Dockerfile`も変更します。
 
 ## 検証
 
@@ -101,7 +124,9 @@ Docker buildでは次を行います。
 - 解決済みマニフェストとインストール版の一致
 - VSIXのSHA-256
 - 日本語Language Packとテーマの提供、およびlocaleを起動引数で強制していないこと
-- 既存のclang-formatとgit-clang-formatを維持し、clangdを追加しないこと
+- clang-format 22.1.4とgit-clang-formatを維持していること
+- clangd 22.1.0が起動し、簡単なCソースを解析できること
+- clangd拡張の解決済みversionと導入済みversionが一致すること
 - GHCRベース名とdigestラベルが一致すること
 
 初期化を一度だけ実行するゲートは、次の単体テストで検証します。
@@ -121,6 +146,20 @@ Docker buildでは次を行います。
 ローカルではコンテナ再起動、AzureではRunning中なら`suspend`から`resume`、Stoppedなら
 `resume`、またはRevision再起動が該当します。ブラウザの再接続だけでは初期化処理は
 実行されません。
+
+clangdを含む新しいイメージへ更新した場合、clangdコマンド自体は全ホームから利用できます。
+一方、初期化済みホームでは初回初期化を再評価しないため、clangd拡張は自動追加されません。
+既存利用者は必要に応じて、code-serverのterminalからイメージ同梱VSIXを手動導入します。
+この操作は`settings.json`を変更せず、Marketplace接続も必要としません。
+
+```bash
+code-server \
+  --user-data-dir /home/user/.local/share/code-server \
+  --extensions-dir /home/user/.local/share/code-server/extensions \
+  --install-extension \
+  /opt/code-server-defaults/vsix/llvm-vs-code-extensions.vscode-clangd-*.vsix \
+  --force
+```
 
 Azure上で`home`と`workspace`を含む利用者環境全体を空にする場合は、Stopped状態で
 `./aca-instance.sh reset <slug>`を実行します。resetは空ディレクトリの再作成までを行い、

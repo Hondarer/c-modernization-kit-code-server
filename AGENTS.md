@@ -28,8 +28,10 @@
   from the image without runtime Marketplace access.
 - Keep `Visual Studio Dark - C++`, the Japanese Language Pack, and
   `ms-vscode.cpptools-themes@2.0.0` unless the user requests a change.
-- Preserve the base image's clang-format and git-clang-format. Do not add clangd or
-  clang-tools-extra without an explicit requirement.
+- Preserve the base image's clang-format 22.1.4 and git-clang-format. Bundle the official x86_64
+  clangd 22.1.0 standalone release with a pinned SHA-256, and keep
+  `llvm-vs-code-extensions.vscode-clangd` in the initial extension manifest. Do not rely on the
+  extension to download clangd at runtime.
 
 ## Local workflow
 

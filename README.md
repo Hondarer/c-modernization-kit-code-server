@@ -9,7 +9,7 @@ Apps環境をサポートします。
 
 - ローカル: インスタンス番号ごとにポート、ホーム、ワークスペースを分離する。
 - Azure: 利用者ごとにContainer App、URL、パスワード、Azure Files Shareを分離する。
-- コンテナ: 日本語Language Pack、`Visual Studio Dark - C++`テーマ、既定拡張をイメージへ同梱する。表示言語は利用者が選択する。
+- コンテナ: 日本語Language Pack、`Visual Studio Dark - C++`テーマ、clangdと既定拡張をイメージへ同梱する。表示言語は利用者が選択する。
 - 認証: code-serverのパスワード認証を使用し、SSHは起動しない。
 
 ## 前提条件
@@ -100,6 +100,7 @@ Agentは共通の不変条件と安全規則を`AGENTS.md`で確認してから�
 ## 制約
 
 - ベースイメージはOracle Linux 8のみを対象とする。
+- clangdを包含する完成イメージはx86_64のみを対象とする。
 - code-serverは1 Appにつき1利用者、1 replicaで運用する。
 - ローカル接続はHTTP、Azure接続はContainer Apps ingressによるHTTPSを使用する。
 - Microsoft Entra ID、カスタムドメイン、CI/CDはこのリポジトリでは構成しない。
