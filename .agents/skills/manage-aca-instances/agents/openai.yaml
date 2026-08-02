@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage ACA Instances"
+  short_description: "利用者別code-server Appの状態・認証・永続領域を管理"
+  default_prompt: "Use $manage-aca-instances to manage isolated code-server user instances."

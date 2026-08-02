@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build code-server Image"
+  short_description: "GHCRベースのcode-serverイメージを安全にbuild・検証"
+  default_prompt: "Use $build-code-server-image to build and verify the local code-server image."

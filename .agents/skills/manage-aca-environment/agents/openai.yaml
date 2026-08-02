@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage ACA Environment"
+  short_description: "code-server共有Azure基盤の作成・監査・削除を安全に実行"
+  default_prompt: "Use $manage-aca-environment to manage the shared Azure Container Apps environment."

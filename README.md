@@ -1,87 +1,105 @@
 # c-modernization-kit-code-server
 
-[oracle-linux-container](https://github.com/hondarer/oracle-linux-container) の開発コンテナに
-[code-server](https://github.com/coder/code-server) (ブラウザ経由の VS Code) を追加する PoC (Proof of Concept) リポジトリです。
+[oracle-linux-container](https://github.com/hondarer/oracle-linux-container)のOracle Linux 8
+開発環境へ、ブラウザから利用できる[code-server](https://github.com/coder/code-server)を
+追加します。rootless Podmanによるローカル実行と、利用者ごとに分離したAzure Container
+Apps環境をサポートします。
 
-短期目標として、code-server を含む追加イメージをローカルで生成・実行し、Web ブラウザから接続できることを確認します。
+## 構成
+
+- ローカル: インスタンス番号ごとにポート、ホーム、ワークスペースを分離する。
+- Azure: 利用者ごとにContainer App、URL、パスワード、Azure Files Shareを分離する。
+- コンテナ: 日本語Language Pack、`Visual Studio Dark - C++`テーマ、既定拡張をイメージへ同梱する。表示言語は利用者が選択する。
+- 認証: code-serverのパスワード認証を使用し、SSHは起動しない。
 
 ## 前提条件
 
-- Podman が利用可能であること
-- [oracle-linux-container](https://github.com/hondarer/oracle-linux-container) をローカルに clone し、
-  `./build-pod.sh 8` を実行して `oracle-linux-8` イメージがビルド済みであること
+- rootless Podman
+- OpenSSL、curl、jq
+- `ghcr.io`から公開ベースイメージをpullできるネットワーク接続
+- Azureへ公開する場合はAzure CLIとContainer Appsを作成できる権限
 
-```bash
-podman images | grep oracle-linux-8
-```
-
-上記でイメージが表示されない場合は、先に oracle-linux-container 側でビルドしてください。
-
-現時点では Oracle Linux 8 のみを対象としています。SSH アクセスは提供しません (code-server の Web UI のみ)。
-
-## ビルド
+## ローカル利用
 
 ```bash
 ./build-pod.sh
+./verify-defaults.sh
+./start-pod.sh 1
 ```
 
-`oracle-linux-8` をベースに、code-server (standalone インストール) を追加したイメージ `code-server-ol8` をビルドします。
+buildは`ghcr.io/hondarer/oracle-linux-container/oracle-linux-8-dev:latest`を毎回pullし、
+その時点のdigestを固定してcode-serverイメージを生成します。ローカルに
+`oracle-linux-container`をcloneまたはbuildする必要はありません。
 
-## 起動
+`http://localhost:8080`へ接続します。インスタンス番号を2にすると、ポートは8081、
+永続領域は`./storage/2`になります。
+
+パスワードは初回起動時に生成されます。
 
 ```bash
-./start-pod.sh [instance_num]
+podman exec code-server-ol8_1 \
+    cat /home/$USER/.config/code-server/config.yaml
+./stop-pod.sh 1
 ```
 
-- `instance_num` を省略すると `1` として扱われます。複数インスタンスを起動する場合に指定してください。
-- ホームディレクトリとワークスペースは `./storage/<instance_num>/home_<user>` と `./storage/<instance_num>/workspace` にマウントされます。
-- 接続ポートは `8080 + (instance_num - 1)` です (インスタンス 1 なら `8080`)。
+## Azure利用
 
-## パスワードの確認
-
-code-server は初回起動時にパスワードを自動生成し、コンテナ内の `~/.config/code-server/config.yaml` に書き込みます。以下のコマンドで確認できます (起動直後は数秒待ってから実行してください)。
+共有基盤を作成してイメージを公開した後、利用者単位でAppを作成します。
 
 ```bash
-podman exec code-server-ol8_1 cat /home/$USER/.config/code-server/config.yaml
+./aca-environment.sh init
+./aca-environment.sh create
+./aca-environment.sh publish
+./aca-instance.sh create alice
+./aca-instance.sh create bob
+./aca-instance.sh list
+./aca-instance.sh suspend alice
+./aca-instance.sh download alice ./backups/
+./aca-instance.sh reset alice
+./aca-instance.sh resume alice
 ```
 
-`password:` フィールドの値がログインパスワードです。
+認証情報、Azure設定、利用者パスワードは`$HOME/.azure`へ保存され、リポジトリには
+含まれません。
 
-## ブラウザから接続
+`suspend`はURL、Secret、Azure Filesを維持したままレプリカを停止します。状態遷移と
+各状態で受付可能なコマンドは[複数利用者の管理](docs/azure-container-apps-multi-instance.md#ライフサイクルと受付可能な操作)
+を参照してください。`download`は利用者別の`home`と`workspace`をローカルのtar.gzへ
+書き出します。`reset`は停止中の永続データを空にし、次回`resume`時に既定設定と拡張機能を
+再初期化します。
 
-ブラウザで以下にアクセスし、上記で確認したパスワードでログインします。
-
-```
-http://localhost:8080
-```
-
-## 停止
+利用者インスタンスを完全に削除する場合は、破壊操作として個別に実行します。
 
 ```bash
-./stop-pod.sh [instance_num]
+./aca-instance.sh delete alice
+# 確認プロンプトへ: alice
 ```
 
-## 動作確認 (CLI のみ)
+`delete`は対象のContainer App、環境ストレージ登録、Azure Files Share、ローカルの
+パスワードファイルを削除します。必要な永続データは、実行前に`download`で退避してください。
 
-ブラウザを使わずに疎通確認したい場合は以下を利用できます。
+## ドキュメント
 
-```bash
-# コンテナが起動しているか
-podman ps | grep code-server-ol8_1
+- [ドキュメント一覧](docs/README.md)
+- [Azure CLIセットアップ](docs/azure-cli-setup.md)
+- [Azure Container Apps公開・運用](docs/azure-container-apps-publish.md)
+- [複数利用者の管理](docs/azure-container-apps-multi-instance.md)
+- [code-serverの既定設定と拡張機能](docs/code-server-defaults.md)
 
-# エントリーポイントのログ (ユーザー作成〜code-server 起動まで)
-podman logs code-server-ol8_1
+## Agent Skills
 
-# code-server プロセスが root ではなく指定ユーザーで動いているか
-podman exec code-server-ol8_1 ps -ef | grep code-server
+リポジトリ固有の操作手順は`.agents/skills`へ目的別に収録しています。
 
-# HTTP での疎通確認 (200 が返れば OK)
-curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8080/login
-```
+- `build-code-server-image`: GHCRベースのローカルbuildと検証
+- `manage-aca-environment`: Azure共有基盤の作成・監査・削除
+- `manage-aca-instances`: 利用者別App、URL、パスワード、永続領域の管理
+- `release-code-server-aca`: build、publish、利用者別Appの順次更新、旧image整理
 
-## 既知の制約・将来拡張
+Agentは共通の不変条件と安全規則を`AGENTS.md`で確認してから操作します。
 
-- SSH アクセスは未対応です。必要であれば `src/code-server-entrypoint.sh` の code-server 起動前に
-  `/usr/sbin/sshd -D &` を追加することで併用できます。
-- Oracle Linux 8 のみを対象としています。oracle-linux-container のようなバージョン切り替え (OL8/OL10) には対応していません。
-- HTTP 平文での通信のみです。`localhost` での利用を前提としており、外部公開する場合は別途 TLS 終端 (リバースプロキシ等) を用意してください。
+## 制約
+
+- ベースイメージはOracle Linux 8のみを対象とする。
+- code-serverは1 Appにつき1利用者、1 replicaで運用する。
+- ローカル接続はHTTP、Azure接続はContainer Apps ingressによるHTTPSを使用する。
+- Microsoft Entra ID、カスタムドメイン、CI/CDはこのリポジトリでは構成しない。

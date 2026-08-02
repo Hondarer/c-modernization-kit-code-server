@@ -1,0 +1,64 @@
+# Azure Container Apps 永続化設定テンプレート
+#
+# docs/azure-container-apps-publish.md の手順で各プレースホルダーを置換してから
+# az containerapp update --yaml へ渡す。Secret の値は含めない。
+identity:
+  type: UserAssigned
+  userAssignedIdentities:
+    __IDENTITY_ID__: {}
+location: __LOCATION__
+name: __APP_NAME__
+resourceGroup: __RESOURCE_GROUP__
+type: Microsoft.App/containerApps
+tags:
+  application: code-server
+  environment: production
+  managed-by: aca-instance.sh
+properties:
+  environmentId: __ENVIRONMENT_ID__
+  configuration:
+    activeRevisionsMode: Single
+    ingress:
+      allowInsecure: false
+      external: true
+      targetPort: 8080
+      traffic:
+        - latestRevision: true
+          weight: 100
+      transport: Auto
+    registries:
+      - identity: __IDENTITY_ID__
+        server: __ACR_LOGIN_SERVER__
+    secrets:
+      - name: code-server-password
+  template:
+    containers:
+      - name: __APP_NAME__
+        image: __REMOTE_IMAGE__
+        env:
+          - name: HOST_USER
+            value: user
+          - name: HOST_UID
+            value: "1000"
+          - name: HOST_GID
+            value: "1000"
+          - name: PASSWORD
+            secretRef: code-server-password
+        resources:
+          cpu: 1.0
+          memory: 2Gi
+        volumeMounts:
+          - volumeName: code-data
+            mountPath: /home/user
+            subPath: home
+          - volumeName: code-data
+            mountPath: /workspace
+            subPath: workspace
+    scale:
+      minReplicas: 1
+      maxReplicas: 1
+    volumes:
+      - name: code-data
+        storageType: AzureFile
+        storageName: __ENV_STORAGE_NAME__
+        mountOptions: uid=1000,gid=1000,dir_mode=0755,file_mode=0755,mfsymlinks,cache=strict,nosharesock,serverino

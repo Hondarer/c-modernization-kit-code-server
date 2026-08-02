@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release code-server to ACA"
+  short_description: "code-serverイメージをAzureへ順次安全にリリース"
+  default_prompt: "Use $release-code-server-aca to publish and roll out a verified code-server image to Azure."

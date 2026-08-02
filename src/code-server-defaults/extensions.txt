@@ -1,0 +1,3 @@
+# One extension per line. Version is optional and resolved during image build.
+MS-CEINTL.vscode-language-pack-ja
+ms-vscode.cpptools-themes@2.0.0

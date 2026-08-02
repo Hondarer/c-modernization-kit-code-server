@@ -10,6 +10,14 @@ HOST_USER=${HOST_USER:-user}
 HOST_UID=${HOST_UID:-1000}
 HOST_GID=${HOST_GID:-1000}
 
+# code-server は PASSWORD と HASHED_PASSWORD の両方が指定された場合、
+# hashed-password を優先する。設定ミスを見逃さないよう、このコンテナでは
+# どちらか一方だけを許可する。
+if [ -n "${PASSWORD:-}" ] && [ -n "${HASHED_PASSWORD:-}" ]; then
+    echo "Error: PASSWORD and HASHED_PASSWORD cannot be set at the same time." >&2
+    exit 1
+fi
+
 echo "Creating user: ${HOST_USER} (UID: ${HOST_UID}, GID: ${HOST_GID})"
 
 # グループの作成 (存在しない場合)
@@ -49,7 +57,7 @@ fi
 
 # パスワードの設定 (sudo 用。code-server 自体の認証とは別)
 echo "${HOST_USER}:${HOST_USER}_passwd" | chpasswd
-echo "Set password for ${HOST_USER}: ${HOST_USER}_passwd"
+echo "Set local password for ${HOST_USER}."
 
 # ホームディレクトリの所有権を確認・修正
 if [ -d "/home/${HOST_USER}" ]; then
@@ -99,23 +107,44 @@ fi
 # (実際の待受けは CLI 引数が優先され 0.0.0.0:8080 になるが、config.yaml の
 # 表示だけが 127.0.0.1 のまま残り紛らわしい)、ここで config.yaml 自体に
 # 正しい bind-addr を書き込み、CLI 引数には頼らないようにする。
-# password は初回のみ自動生成して書き込む (--auth none は使わない)。
+# PASSWORD / HASHED_PASSWORD が環境変数で指定されている場合は、Secret を
+# config.yaml に複製しない。未指定のローカル起動だけ、初回パスワードを
+# 自動生成して config.yaml に書き込む (--auth none は使わない)。
 CODE_SERVER_CONFIG_DIR="/home/${HOST_USER}/.config/code-server"
 CODE_SERVER_CONFIG="${CODE_SERVER_CONFIG_DIR}/config.yaml"
 mkdir -p "${CODE_SERVER_CONFIG_DIR}"
 if [ ! -f "${CODE_SERVER_CONFIG}" ]; then
-    GENERATED_PASSWORD=$(head -c12 /dev/urandom | od -An -tx1 | tr -d ' \n')
     cat > "${CODE_SERVER_CONFIG}" <<EOF
 bind-addr: 0.0.0.0:8080
 auth: password
-password: ${GENERATED_PASSWORD}
 cert: false
 EOF
+
+    if [ -z "${PASSWORD:-}" ] && [ -z "${HASHED_PASSWORD:-}" ]; then
+        GENERATED_PASSWORD=$(head -c12 /dev/urandom | od -An -tx1 | tr -d ' \n')
+        echo "password: ${GENERATED_PASSWORD}" >> "${CODE_SERVER_CONFIG}"
+    fi
 fi
-chown -R "${HOST_UID}:${HOST_GID}" "/home/${HOST_USER}/.config"
+
+# Azure Files (SMB) では uid/gid をマウントオプションで固定するため、所有者が
+# 既に一致していれば chown を実行しない。ローカル bind mount では従来通り、
+# root が作成した設定ディレクトリをユーザー所有へ変更する。
+config_uid=$(stat -c "%u" "${CODE_SERVER_CONFIG_DIR}")
+config_gid=$(stat -c "%g" "${CODE_SERVER_CONFIG_DIR}")
+if [ "${config_uid}" -ne "${HOST_UID}" ] || [ "${config_gid}" -ne "${HOST_GID}" ]; then
+    chown -R "${HOST_UID}:${HOST_GID}" "/home/${HOST_USER}/.config"
+fi
+
+# イメージに同梱した既定設定と拡張機能を、不足している場合だけ配置する。
+/usr/local/bin/code-server-bootstrap-defaults.sh
 
 # code-server を foreground 起動 (ここでブロックされる)
-# ※ SSH は本 PoC では起動しない。必要であれば
+# SSHは起動しない。必要であれば
 #    `/usr/sbin/sshd -D &` をこの直前に追加することで併用できる。
 echo "Starting code-server..."
-exec su - "${HOST_USER}" -c "code-server /workspace"
+# su --login は PASSWORD / HASHED_PASSWORD を破棄するため使用しない。
+# HOME 等を明示した上で runuser により権限だけを切り替える。
+export HOME="/home/${HOST_USER}"
+export USER="${HOST_USER}"
+export LOGNAME="${HOST_USER}"
+exec runuser -u "${HOST_USER}" -- code-server /workspace

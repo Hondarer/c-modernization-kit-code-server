@@ -34,4 +34,4 @@ CONTAINER_INSTANCE="${CONTAINER_NAME}_${INSTANCE_NUM}"
 CODE_SERVER_HOST_PORT=$((8080 + INSTANCE_NUM - 1))
 
 STORAGE_DIR="./storage/${INSTANCE_NUM}"
-BASE_IMAGE="oracle-linux-8"
+BASE_IMAGE="${BASE_IMAGE:-ghcr.io/hondarer/oracle-linux-container/oracle-linux-8-dev:latest}"
