@@ -16,3 +16,4 @@ ms-vscode.makefile-tools
 redhat.vscode-yaml
 shd101wyy.markdown-preview-enhanced
 wayou.vscode-todo-highlight
+webfreak.debug

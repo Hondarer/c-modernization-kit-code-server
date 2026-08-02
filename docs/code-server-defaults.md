@@ -7,9 +7,11 @@
 
 `src/code-server-defaults/User/settings.json`で管理します。
 
-```json
+```jsonc
 {
+  // 初回起動時のカラーテーマにC/C++向けVisual Studio Darkを使用する。
   "workbench.colorTheme": "Visual Studio Dark - C++",
+  // ワークスペース信頼確認を無効化し、開いた直後から全機能を利用可能にする。
   "security.workspace.trust.enabled": false
 }
 ```
@@ -64,6 +66,35 @@ clangdに実際のbuild optionを認識させるには、対象プロジェク�
 
 ```bash
 cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+```
+
+## デバッグ実行 (gdb)
+
+`ms-vscode.cpptools`本体(および付属の`cppdbg`デバッグアダプタ)はMicrosoft Visual Studio
+Marketplace限定配布のためOpen VSXから取得できません。代わりに初期拡張`webfreak.debug`
+(Native Debug)を同梱します。ネイティブバイナリを含まない拡張で、GDB/MIプロトコル経由で
+システムの`gdb`を直接起動します。ベースイメージには`gdb`・`gcc`/`g++`・`make`・`cmake`が
+既に含まれており、追加のインストールは不要です。
+
+デバッグ対象は`-g`付きでコンパイルします。CMakeプロジェクトでは
+`-DCMAKE_BUILD_TYPE=Debug`を指定します。
+
+ワークスペースの`.vscode/launch.json`に次のような設定を追加します(`code-server-defaults`は
+ユーザー全体設定のみを同梱するため、`launch.json`はワークスペースごとに用意します)。
+
+```jsonc
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "gdbで実行",
+      "type": "gdb",
+      "request": "launch",
+      "target": "${workspaceFolder}/build/app",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
 ```
 
 ## buildと起動
@@ -127,6 +158,7 @@ Docker buildでは次を行います。
 - clang-format 22.1.4とgit-clang-formatを維持していること
 - clangd 22.1.0が起動し、簡単なCソースを解析できること
 - clangd拡張の解決済みversionと導入済みversionが一致すること
+- webfreak.debug(Native Debug)拡張の解決済みversionと導入済みversionが一致すること
 - GHCRベース名とdigestラベルが一致すること
 
 初期化を一度だけ実行するゲートは、次の単体テストで検証します。

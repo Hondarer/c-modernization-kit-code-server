@@ -75,10 +75,14 @@ language_pack="$(printf '%s\n' "$resolved_extensions" |
     grep -Ei '^MS-CEINTL\.vscode-language-pack-ja@[A-Za-z0-9._-]+$')"
 clangd_extension="$(printf '%s\n' "$resolved_extensions" |
     grep -Ei '^llvm-vs-code-extensions\.vscode-clangd@[A-Za-z0-9._-]+$')"
+debug_extension="$(printf '%s\n' "$resolved_extensions" |
+    grep -Ei '^webfreak\.debug@[A-Za-z0-9._-]+$')"
 [ "$(printf '%s\n' "$language_pack" | wc -l)" -eq 1 ]
 [ "$(printf '%s\n' "$clangd_extension" | wc -l)" -eq 1 ]
+[ "$(printf '%s\n' "$debug_extension" | wc -l)" -eq 1 ]
 printf '%s\n' "$extensions" | grep -Fqix "$language_pack"
 printf '%s\n' "$extensions" | grep -Fqix "$clangd_extension"
+printf '%s\n' "$extensions" | grep -Fqix "$debug_extension"
 printf '%s\n' "$extensions" | grep -Fqix 'ms-vscode.cpptools-themes@2.0.0'
 printf '%s\n' "$resolved_extensions" | grep -Fqix 'ms-vscode.cpptools-themes@2.0.0'
 podman exec "$CONTAINER_NAME" sh -lc \
