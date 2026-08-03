@@ -1,19 +1,19 @@
 {
-    // ワークスペース信頼確認を無効化する。
+    // ワークスペース信頼確認を無効化する
     "security.workspace.trust.enabled": false,
-    // 初回起動時のカラーテーマにC/C++向けVisual Studio Darkを使用する。
+    // 初回起動時のカラーテーマに C/C++ 向け Visual Studio Dark を使用する
     "workbench.colorTheme": "Visual Studio Dark - C++",
-    // フォントを UDEV Gothic HSRFJPDOCEM 15px にする。
+    // フォントを UDEV Gothic HSRFJPDOCEM 15px にする
     "editor.fontFamily": "'UDEV Gothic HSRFJPDOCEM'",
     "editor.fontSize": 15,
     // git の自動フェッチを有効にする
     "git.autofetch": true,
-    // エディタ上ですべての空白文字を可視化する。
+    // エディタ上ですべての空白文字を可視化する
     "editor.renderWhitespace": "all",
-    // diffで行末空白の違いを無視せず、変更として表示する。
+    // diff で行末空白の違いを無視せず、変更として表示する
     "diffEditor.ignoreTrimWhitespace": false,
-    // Markdown Preview Enhancedが使用するPlantUML JARのパスを指定する。
+    // Markdown Preview Enhanced が使用する PlantUML JAR のパスを指定する
     "markdown-preview-enhanced.plantumlJarPath": "${env:PLANTUML_HOME}/plantuml.jar",
-    // PlantUML拡張が使用するPlantUML JARのパスを指定する。
+    // PlantUML 拡張が使用する PlantUML JAR のパスを指定する
     "plantuml.jar": "${env:PLANTUML_HOME}/plantuml.jar",
 }
