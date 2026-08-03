@@ -1,21 +1,21 @@
 # One extension per line. Version is optional and resolved during image build.
-MS-CEINTL.vscode-language-pack-ja
-ms-vscode.cpptools-themes@2.0.0
-davidanson.vscode-markdownlint
-editorconfig.editorconfig
-hediet.vscode-drawio
-jebbs.plantuml
-llvm-vs-code-extensions.vscode-clangd
-marp-team.marp-vscode
-ms-python.debugpy
-ms-python.python
-ms-python.vscode-python-envs
-ms-vscode.cmake-tools
-ms-vscode.hexeditor
-ms-vscode.makefile-tools
-redhat.vscode-yaml
-shd101wyy.markdown-preview-enhanced
-tetsuohonda.vscode-debug-params
-tetsuohonda.vscode-multilang-md
-wayou.vscode-todo-highlight
-webfreak.debug
+MS-CEINTL.vscode-language-pack-ja     # Japanese Language Pack for Visual Studio Code
+ms-vscode.cpptools-themes@2.0.0       # C/C++ Themes
+davidanson.vscode-markdownlint        # markdownlint
+editorconfig.editorconfig             # EditorConfig
+hediet.vscode-drawio                  # Draw.io Integration
+jebbs.plantuml                        # PlantUML
+llvm-vs-code-extensions.vscode-clangd # clangd
+marp-team.marp-vscode                 # Marp for VS Code
+ms-python.debugpy                     # Python Debugger
+ms-python.python                      # Python
+ms-python.vscode-python-envs          # Python Environments
+ms-vscode.cmake-tools                 # CMake Tools
+ms-vscode.hexeditor                   # Hex Editor
+ms-vscode.makefile-tools              # Makefile Tools
+redhat.vscode-yaml                    # YAML
+shd101wyy.markdown-preview-enhanced   # Markdown Preview Enhanced
+tetsuohonda.vscode-debug-params       # Debug Params
+tetsuohonda.vscode-multilang-md       # vscode-multilang-md
+wayou.vscode-todo-highlight           # TODO Highlight
+webfreak.debug                        # Native Debug
