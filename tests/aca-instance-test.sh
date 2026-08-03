@@ -347,7 +347,8 @@ mkdir "$TEST_DIR/download-default"
 (
     cd "$TEST_DIR/download-default"
     download_output="$($REPO_DIR/aca-instance.sh --config "$TEST_DIR/config.env" download alice)"
-    archive_path="${download_output#Saved instance data: }"
+    archive_path="$(grep '^Saved instance data: ' <<< "$download_output")"
+    archive_path="${archive_path#Saved instance data: }"
     test -f "$archive_path"
     test "$(stat -c '%a' "$archive_path")" = 600
     tar -tzf "$archive_path" | grep -qx 'home/marker.txt'
@@ -364,7 +365,8 @@ explicit_archive="$TEST_DIR/alice-explicit.tar.gz"
 test -f "$explicit_archive"
 mkdir "$TEST_DIR/download-directory"
 directory_output="$($REPO_DIR/aca-instance.sh --config "$TEST_DIR/config.env" download alice "$TEST_DIR/download-directory")"
-directory_archive="${directory_output#Saved instance data: }"
+directory_archive="$(grep '^Saved instance data: ' <<< "$directory_output")"
+directory_archive="${directory_archive#Saved instance data: }"
 test -f "$directory_archive"
 
 printf 'Stopped\n' > "$MOCK_RUNNING"

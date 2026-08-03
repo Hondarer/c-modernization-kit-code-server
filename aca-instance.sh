@@ -4,6 +4,8 @@
 
 set -euo pipefail
 
+echo "Started: $(date +'%Y-%m-%dT%H:%M:%S.%3N%:z')"
+
 # Azure CLIのPreview/extension通知は通常運用では抑制し、実際のエラーは表示する。
 # 診断時は AZURE_CORE_ONLY_SHOW_ERRORS=false を指定すると警告を再表示できる。
 export AZURE_CORE_ONLY_SHOW_ERRORS="${AZURE_CORE_ONLY_SHOW_ERRORS:-true}"
