@@ -1,0 +1,4 @@
+{
+    // PlantUML 拡張が使用する PlantUML JAR のパスを指定する
+    "plantuml.jar": "/usr/local/bin/plantuml.jar",
+}

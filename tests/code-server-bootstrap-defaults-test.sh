@@ -6,7 +6,11 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 
-mkdir -p "$TEST_DIR/bin" "$TEST_DIR/defaults/User" "$TEST_DIR/defaults/vsix"
+mkdir -p \
+    "$TEST_DIR/bin" \
+    "$TEST_DIR/defaults/User" \
+    "$TEST_DIR/defaults/Machine" \
+    "$TEST_DIR/defaults/vsix"
 export MOCK_CODE_SERVER_LOG="$TEST_DIR/code-server.log"
 export MOCK_FAIL_INSTALL=false
 
@@ -56,6 +60,8 @@ export PATH="$TEST_DIR/bin:$PATH"
 
 printf '%s\n' '{"workbench.colorTheme":"Visual Studio Dark - C++"}' \
     > "$TEST_DIR/defaults/User/settings.json"
+printf '%s\n' '{"plantuml.jar":"/usr/local/bin/plantuml.jar"}' \
+    > "$TEST_DIR/defaults/Machine/settings.json"
 printf 'vsix\n' > "$TEST_DIR/defaults/vsix/Example.theme-1.0.0.vsix"
 printf '%s\n' 'Example.theme@1.0.0' > "$TEST_DIR/defaults/vsix/resolved-extensions.txt"
 
@@ -72,24 +78,30 @@ run_bootstrap() {
 user_data="$TEST_DIR/user-data"
 run_bootstrap "$user_data" >/dev/null
 cmp "$TEST_DIR/defaults/User/settings.json" "$user_data/User/settings.json"
+cmp "$TEST_DIR/defaults/Machine/settings.json" "$user_data/Machine/settings.json"
 grep -Fqix 'Example.theme@1.0.0' "$user_data/extensions/.installed"
 grep -Fq -- '--install-extension' "$MOCK_CODE_SERVER_LOG"
 
 # Existing settings.json is the only gate. Do not inspect the manifest or repair extensions.
 rm -f "$user_data/extensions/.installed"
+rm -f "$user_data/Machine/settings.json"
 mv "$TEST_DIR/defaults/vsix/resolved-extensions.txt" "$TEST_DIR/resolved-extensions.saved"
+mv "$TEST_DIR/defaults/Machine/settings.json" "$TEST_DIR/machine-settings.saved"
 before_calls="$(wc -l < "$MOCK_CODE_SERVER_LOG")"
 run_bootstrap "$user_data" >/dev/null
 after_calls="$(wc -l < "$MOCK_CODE_SERVER_LOG")"
 test "$before_calls" = "$after_calls"
 test ! -e "$user_data/extensions/.installed"
+test ! -e "$user_data/Machine/settings.json"
 
 # Removing settings.json opts into initialization on the next process start.
 mv "$TEST_DIR/resolved-extensions.saved" "$TEST_DIR/defaults/vsix/resolved-extensions.txt"
+mv "$TEST_DIR/machine-settings.saved" "$TEST_DIR/defaults/Machine/settings.json"
 rm -f "$user_data/User/settings.json"
 run_bootstrap "$user_data" >/dev/null
 grep -Fqix 'Example.theme@1.0.0' "$user_data/extensions/.installed"
 test -f "$user_data/User/settings.json"
+cmp "$TEST_DIR/defaults/Machine/settings.json" "$user_data/Machine/settings.json"
 
 # A failed extension installation must not create the completion marker.
 failed_user_data="$TEST_DIR/failed-user-data"
@@ -99,5 +111,6 @@ if run_bootstrap "$failed_user_data" >/dev/null 2>&1; then
     exit 1
 fi
 test ! -e "$failed_user_data/User/settings.json"
+test ! -e "$failed_user_data/Machine/settings.json"
 
 echo 'code-server bootstrap defaults tests: PASS'

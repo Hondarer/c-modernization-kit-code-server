@@ -14,6 +14,4 @@
     "diffEditor.ignoreTrimWhitespace": false,
     // Markdown Preview Enhanced が使用する PlantUML JAR のパスを指定する
     "markdown-preview-enhanced.plantumlJarPath": "${env:PLANTUML_HOME}/plantuml.jar",
-    // PlantUML 拡張が使用する PlantUML JAR のパスを指定する
-    "plantuml.jar": "${env:PLANTUML_HOME}/plantuml.jar",
 }

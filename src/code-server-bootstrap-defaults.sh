@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Initialize default settings and extensions once, using settings.json as the completion marker.
+# Initialize default settings and extensions once, using User/settings.json as the completion marker.
 
 set -euo pipefail
 
@@ -13,6 +13,8 @@ USER_DATA_DIR="${CODE_SERVER_USER_DATA_DIR:-${USER_HOME}/.local/share/code-serve
 USER_EXTENSIONS_DIR="${USER_DATA_DIR}/extensions"
 DEFAULT_SETTINGS="${DEFAULTS_DIR}/User/settings.json"
 USER_SETTINGS="${USER_DATA_DIR}/User/settings.json"
+DEFAULT_MACHINE_SETTINGS="${DEFAULTS_DIR}/Machine/settings.json"
+MACHINE_SETTINGS="${USER_DATA_DIR}/Machine/settings.json"
 MANIFEST="${DEFAULTS_DIR}/vsix/resolved-extensions.txt"
 
 [ ! -e "$USER_SETTINGS" ] || {
@@ -24,13 +26,21 @@ MANIFEST="${DEFAULTS_DIR}/vsix/resolved-extensions.txt"
     echo "Error: default settings not found: ${DEFAULT_SETTINGS}" >&2
     exit 1
 }
+[ -f "$DEFAULT_MACHINE_SETTINGS" ] || {
+    echo "Error: default settings not found: ${DEFAULT_MACHINE_SETTINGS}" >&2
+    exit 1
+}
 [ -f "$MANIFEST" ] || {
     echo "Error: resolved default extension manifest not found: ${MANIFEST}" >&2
     exit 1
 }
 
-mkdir -p "${USER_DATA_DIR}/User" "$USER_EXTENSIONS_DIR"
-for directory in "$USER_DATA_DIR" "${USER_DATA_DIR}/User" "$USER_EXTENSIONS_DIR"; do
+mkdir -p "${USER_DATA_DIR}/User" "${USER_DATA_DIR}/Machine" "$USER_EXTENSIONS_DIR"
+for directory in \
+    "$USER_DATA_DIR" \
+    "${USER_DATA_DIR}/User" \
+    "${USER_DATA_DIR}/Machine" \
+    "$USER_EXTENSIONS_DIR"; do
     if [ "$(stat -c '%u:%g' "$directory")" != "${HOST_UID}:${HOST_GID}" ]; then
         chown "${HOST_UID}:${HOST_GID}" "$directory"
     fi
@@ -80,15 +90,22 @@ while IFS= read -r manifest_line || [ -n "$manifest_line" ]; do
     }
 done < "$MANIFEST"
 
-# settings.json is the completion marker. Install it only after every extension has been verified,
-# so an interrupted or failed initialization is retried on the next code-server process start.
-settings_tmp="${USER_SETTINGS}.tmp.$$"
-trap 'rm -f "${settings_tmp:-}"' EXIT
-cp "$DEFAULT_SETTINGS" "$settings_tmp"
-chmod 0644 "$settings_tmp"
-if [ "$(stat -c '%u:%g' "$settings_tmp")" != "${HOST_UID}:${HOST_GID}" ]; then
-    chown "${HOST_UID}:${HOST_GID}" "$settings_tmp"
-fi
-mv -f "$settings_tmp" "$USER_SETTINGS"
+# User/settings.json is the completion marker. Stage both settings files only after every extension
+# has been verified, then publish Machine settings before publishing the marker last. An interrupted
+# or failed initialization is therefore retried on the next code-server process start.
+machine_settings_tmp="${MACHINE_SETTINGS}.tmp.$$"
+user_settings_tmp="${USER_SETTINGS}.tmp.$$"
+trap 'rm -f "${machine_settings_tmp:-}" "${user_settings_tmp:-}"' EXIT
+cp "$DEFAULT_MACHINE_SETTINGS" "$machine_settings_tmp"
+cp "$DEFAULT_SETTINGS" "$user_settings_tmp"
+chmod 0644 "$machine_settings_tmp" "$user_settings_tmp"
+for settings_tmp in "$machine_settings_tmp" "$user_settings_tmp"; do
+    if [ "$(stat -c '%u:%g' "$settings_tmp")" != "${HOST_UID}:${HOST_GID}" ]; then
+        chown "${HOST_UID}:${HOST_GID}" "$settings_tmp"
+    fi
+done
+mv -f "$machine_settings_tmp" "$MACHINE_SETTINGS"
+echo "Installed default code-server setting: Machine/settings.json"
+mv -f "$user_settings_tmp" "$USER_SETTINGS"
 trap - EXIT
 echo "Installed default code-server setting: User/settings.json"

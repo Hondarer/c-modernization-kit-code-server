@@ -18,11 +18,12 @@
   version and the Japanese Language Pack.
 - Start code-server as the configured non-root user without forcing `--locale`. Do not start SSH;
   let each user choose the display language after startup.
-- Treat the user's `settings.json` as the completion marker for default settings and extension
-  initialization. If it exists, skip the entire defaults workflow without inspecting settings,
-  the extension manifest, or installed extensions.
-- When `settings.json` is absent, install and verify bundled extensions first, then place
-  `settings.json` last. A failure must leave it absent so the next process start retries.
+- Treat the user's `User/settings.json` as the completion marker for default settings and extension
+  initialization. If it exists, skip the entire defaults workflow without inspecting User or
+  Machine settings, the extension manifest, or installed extensions.
+- When `User/settings.json` is absent, install and verify bundled extensions first, place
+  `Machine/settings.json`, then place `User/settings.json` last. A failure must leave the User
+  settings marker absent so the next process start retries.
 - Accept both `publisher.extension` and `publisher.extension@version` in `extensions.txt`.
   Resolve extensions during image build, bundle the resolved VSIX files and hashes, and install
   from the image without runtime Marketplace access.

@@ -5,7 +5,11 @@
 
 ## 既定設定
 
-`src/code-server-defaults/User/settings.json`で管理します。
+設定の適用先に合わせ、次の2ファイルで管理します。
+
+- User settings: `src/code-server-defaults/User/settings.json`
+- Remote settingsとして扱われるMachine settings:
+  `src/code-server-defaults/Machine/settings.json`
 
 ```jsonc
 {
@@ -15,6 +19,10 @@
   "security.workspace.trust.enabled": false
 }
 ```
+
+PlantUML拡張の`plantuml.jar`はcode-serverではRemote settingsとして扱われるため、
+Machine settingsへ配置します。Markdown Preview Enhancedの
+`markdown-preview-enhanced.plantumlJarPath`など、その他の既定値はUser settingsへ配置します。
 
 code-serverのlocaleは起動引数で強制しません。日本語Language Packは初期拡張として
 同梱しますが、表示言語は利用者がcode-serverの表示言語選択機能から変更します。選択内容
@@ -125,17 +133,18 @@ Docker buildでは次を行います。
 
 | 起動時の状態 | 動作 |
 |---|---|
-| `settings.json`が存在する | 設定内容、拡張manifest、導入済み拡張を確認せず、初期化処理全体をスキップする |
-| `settings.json`が存在しない | イメージ内VSIXから不足拡張を導入・検証し、最後に既定`settings.json`を配置する |
+| User settingsが存在する | User・Machine設定、拡張manifest、導入済み拡張を確認せず、初期化処理全体をスキップする |
+| User settingsが存在しない | イメージ内VSIXから不足拡張を導入・検証し、Machine settings、最後にUser settingsを配置する |
 
-`settings.json`を最後に配置するため、拡張機能の導入や検証に失敗した場合は未初期化状態の
-ままとなり、次回のcode-serverプロセス起動で再試行します。初期化完了後は、利用者が
-既定拡張を削除しても自動では再導入しません。また、manifestから拡張を削除して新しい
-イメージを配布しても、既存利用者の拡張を自動アンインストールしません。
+User settingsを最後に配置するため、拡張機能の導入・検証やMachine settingsの配置に
+失敗した場合は未初期化状態のままとなり、次回のcode-serverプロセス起動で再試行します。
+初期化完了後は、利用者が既定拡張を削除しても自動では再導入しません。また、manifestから
+拡張を削除して新しいイメージを配布しても、既存利用者の拡張を自動アンインストールしません。
 
-既定値の内容を変更する場合の通常の変更スコープは次の2ファイルです。
+既定値の内容を変更する場合の通常の変更スコープは次の3ファイルです。
 
-- 設定: `src/code-server-defaults/User/settings.json`
+- User settings: `src/code-server-defaults/User/settings.json`
+- Machine settings: `src/code-server-defaults/Machine/settings.json`
 - 初期拡張の追加・削除・version変更: `src/code-server-defaults/extensions.txt`
 
 変更後はイメージを再buildします。初期化処理自体の仕様を変更しない限り、runtime scriptの
@@ -151,7 +160,7 @@ Docker buildでは次を行います。
 
 検証用コンテナは一時ホームを使用し、`--network none`で起動します。次を確認します。
 
-- settings.jsonの初期配置
+- User・Machine settings.jsonの初期配置と設定の振り分け
 - 解決済みマニフェストとインストール版の一致
 - VSIXのSHA-256
 - 日本語Language Packとテーマの提供、およびlocaleを起動引数で強制していないこと
@@ -173,11 +182,22 @@ Docker buildでは次を行います。
 ./start-pod.sh 1
 ```
 
-既存環境へ既定設定と不足する初期拡張を再適用する場合は、利用者自身が必要な内容を
-バックアップしてから`settings.json`を削除し、code-serverプロセスを起動し直します。
+既存環境へ既定設定と不足する初期拡張を再適用する場合は、利用者自身がUser・Machine設定を
+バックアップしてからUser settingsを削除し、code-serverプロセスを起動し直します。
 ローカルではコンテナ再起動、AzureではRunning中なら`suspend`から`resume`、Stoppedなら
 `resume`、またはRevision再起動が該当します。ブラウザの再接続だけでは初期化処理は
 実行されません。
+
+既存環境でPlantUML設定だけを移行する場合は、
+`/home/user/.local/share/code-server/User/settings.json`から`plantuml.jar`を削除し、既存内容を
+上書きしないよう`/home/user/.local/share/code-server/Machine/settings.json`へ次の設定を
+マージします。イメージ更新だけでは、初期化済みホームの設定は自動変更されません。
+
+```jsonc
+{
+  "plantuml.jar": "/usr/local/bin/plantuml.jar"
+}
+```
 
 clangdを含む新しいイメージへ更新した場合、clangdコマンド自体は全ホームから利用できます。
 一方、初期化済みホームでは初回初期化を再評価しないため、clangd拡張は自動追加されません。

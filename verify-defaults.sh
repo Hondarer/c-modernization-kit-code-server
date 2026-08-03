@@ -67,6 +67,25 @@ start_test_container
 
 podman exec "$CONTAINER_NAME" \
     test -f /home/user/.local/share/code-server/User/settings.json
+podman exec "$CONTAINER_NAME" \
+    test -f /home/user/.local/share/code-server/Machine/settings.json
+podman exec "$CONTAINER_NAME" cmp \
+    /opt/code-server-defaults/User/settings.json \
+    /home/user/.local/share/code-server/User/settings.json
+podman exec "$CONTAINER_NAME" cmp \
+    /opt/code-server-defaults/Machine/settings.json \
+    /home/user/.local/share/code-server/Machine/settings.json
+podman exec "$CONTAINER_NAME" grep -Fq \
+    '"plantuml.jar": "/usr/local/bin/plantuml.jar"' \
+    /home/user/.local/share/code-server/Machine/settings.json
+if podman exec "$CONTAINER_NAME" grep -Fq '"plantuml.jar"' \
+    /home/user/.local/share/code-server/User/settings.json; then
+    echo 'Error: plantuml.jar must be stored in Machine settings only.' >&2
+    exit 1
+fi
+podman exec "$CONTAINER_NAME" grep -Fq \
+    '"markdown-preview-enhanced.plantumlJarPath"' \
+    /home/user/.local/share/code-server/User/settings.json
 
 extensions="$(list_extensions)"
 resolved_extensions="$(podman exec "$CONTAINER_NAME" \
