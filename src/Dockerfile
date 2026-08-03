@@ -57,10 +57,15 @@ RUN chown -R root:root /opt/code-server-defaults \
     rm -f /root/.config/code-server/config.yaml
 
 # エントリーポイント用スクリプトの配置
-ADD code-server-entrypoint.sh code-server-bootstrap-defaults.sh /usr/local/bin/
+# code-server-init-home.sh は home/workspace 初期化のみを行う独立スクリプトで、
+# エントリーポイントから呼ばれるほか、Azure Container Apps の init Job からも
+# 単独で実行される (docs/azure-container-apps-multi-instance.md 参照)。
+ADD code-server-entrypoint.sh code-server-init-home.sh code-server-bootstrap-defaults.sh /usr/local/bin/
 RUN chown root:root /usr/local/bin/code-server-entrypoint.sh \
+        /usr/local/bin/code-server-init-home.sh \
         /usr/local/bin/code-server-bootstrap-defaults.sh && \
     chmod 0755 /usr/local/bin/code-server-entrypoint.sh \
+        /usr/local/bin/code-server-init-home.sh \
         /usr/local/bin/code-server-bootstrap-defaults.sh
 
 # エントリーポイントの設定 (ベースイメージの sshd 起動用 ENTRYPOINT を上書きする)

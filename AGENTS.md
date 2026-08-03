@@ -55,7 +55,13 @@ Do not delete or reset those paths unless explicitly authorized.
   individual user lifecycle operations.
 - Treat `docs/azure-container-apps-multi-instance.md` as the lifecycle state-machine source of
   truth. Only `suspend` and `resume` may transition an App between Running and Stopped; they use
-  the Container Apps stable REST API through `az rest`, not the Container Apps Job commands.
+  the Container Apps stable REST API through `az rest`, not the Container Apps Job commands. This
+  is unrelated to the per-instance init Job (`<App name>-init`, Manual trigger) that `create` and
+  `reset` run to pre-populate `home` with defaults before the App ever starts; that Job never
+  transitions the App's own Running/Stopped state.
+- `create` and `reset` must pre-populate `home` via the init Job before the App can start or
+  resume. Azure Files extension installs are slow enough to exceed the Container Apps default
+  startup probe and cause a CrashLoopBackOff if done inside the App's own startup instead.
 - Check provisioning and running status before every instance mutation. Never let `create`,
   `update`, or `rotate-password` implicitly start a stopped App. Transitional or unknown states
   permit only read operations and confirmed deletion.
@@ -64,8 +70,9 @@ Do not delete or reset those paths unless explicitly authorized.
   path, and publish only a complete mode-600 archive. Suspend first when point-in-time consistency
   matters; the archive is a logical content export, not an Azure Files metadata/snapshot backup.
 - Permit destructive `reset` only for `Succeeded / Stopped` and require exact `reset <slug>`
-  confirmation. It may replace only the share's `home` and `workspace` directories and must not
-  start the App. The next explicit `resume` applies defaults bundled in the App's assigned image.
+  confirmation. It may replace only the share's `home` and `workspace` directories, then runs the
+  init Job to pre-populate defaults, and must not start the App itself. The next explicit `resume`
+  only starts the App; defaults are already installed by the init Job.
 - Roll out image updates sequentially. Update one user, verify the new image, Healthy state,
   traffic 100%, login, and persistent workspace, then update the next user and repeat.
 - To update a stopped App, explicitly resume, update and verify it, then suspend it again if

@@ -8,6 +8,8 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 
 mkdir -p "$TEST_DIR/bin" "$TEST_DIR/passwords"
 export MOCK_STATE="$TEST_DIR/app-exists"
+export MOCK_JOB_STATE="$TEST_DIR/job-exists"
+export MOCK_JOB_EXECUTION_STATUS=Succeeded
 export MOCK_SHARE="$TEST_DIR/share-exists"
 export MOCK_LOG="$TEST_DIR/az.log"
 export MOCK_RUNNING="$TEST_DIR/running-status"
@@ -137,6 +139,27 @@ case "$1 $2" in
         esac
         ;;
     "containerapp create") touch "$MOCK_STATE" ;;
+    "containerapp job")
+        case "$3" in
+            show) [ -f "$MOCK_JOB_STATE" ] || exit 1 ;;
+            create) touch "$MOCK_JOB_STATE" ;;
+            update) [ -f "$MOCK_JOB_STATE" ] || exit 1 ;;
+            secret)
+                [ "$4" = "set" ] || exit 1
+                [ -f "$MOCK_JOB_STATE" ] || exit 1
+                ;;
+            start)
+                [ -f "$MOCK_JOB_STATE" ] || exit 1
+                echo 'code-server-ol8-alice-init-exec1'
+                ;;
+            execution)
+                [ "$4" = "show" ] || exit 1
+                printf '%s\n' "$MOCK_JOB_EXECUTION_STATUS"
+                ;;
+            delete) rm -f "$MOCK_JOB_STATE" ;;
+            *) exit 1 ;;
+        esac
+        ;;
     "containerapp list")
         printf 'code-server-ol8-alice\tcode-server-ol8-alice.test.azurecontainerapps.io\t%s\t%s\n' \
             "$(cat "$MOCK_PROVISIONING")" "$(cat "$MOCK_RUNNING")"
@@ -177,11 +200,17 @@ test "$(stat -c '%a' "$TEST_DIR/passwords/alice/password")" = 600
 grep -q 'containerapp create.*code-server-ol8-alice' "$MOCK_LOG"
 grep -q 'storage-name code-server-alice-storage' "$MOCK_LOG"
 grep -q 'share-rm create.*-n code-server-alice' "$MOCK_LOG"
+grep -q 'containerapp job create.*code-server-ol8-alice-init' "$MOCK_LOG"
+grep -q '^containerapp job start -g rg-test -n code-server-ol8-alice-init' "$MOCK_LOG"
+grep -q 'containerapp job secret set.*code-server-ol8-alice-init' "$MOCK_LOG"
+test -f "$MOCK_JOB_STATE"
 
 before_count="$(grep -c '^containerapp create' "$MOCK_LOG")"
+before_job_create_count="$(grep -c '^containerapp job create' "$MOCK_LOG")"
 second_output="$($REPO_DIR/aca-instance.sh --config "$TEST_DIR/config.env" create alice 2>/dev/null)"
 after_count="$(grep -c '^containerapp create' "$MOCK_LOG")"
 test "$before_count" = "$after_count"
+test "$before_job_create_count" = "$(grep -c '^containerapp job create' "$MOCK_LOG")"
 grep -q $'alice\thttps://code-server-ol8-alice.test.azurecontainerapps.io/' <<< "$second_output"
 
 list_output="$($REPO_DIR/aca-instance.sh --config "$TEST_DIR/config.env" list)"
@@ -212,6 +241,7 @@ grep -q 'nothing was reset' "$TEST_DIR/reset-confirmation.err"
 test "$before_reset_mutations" = "$(grep -Ec '^(storage remove|storage directory (create|delete)|rest --method)' "$MOCK_LOG" || true)"
 
 before_reset_rest_count="$(grep -c '^rest --method' "$MOCK_LOG" || true)"
+before_reset_job_start_count="$(grep -c '^containerapp job start' "$MOCK_LOG" || true)"
 reset_output="$(printf 'reset alice\n' | "$REPO_DIR/aca-instance.sh" \
     --config "$TEST_DIR/config.env" reset alice)"
 grep -q 'instance remains stopped' <<< "$reset_output"
@@ -221,6 +251,17 @@ test -f "$MOCK_WORKSPACE_DIR"
 grep -q '^storage remove.*--path home --recursive' "$MOCK_LOG"
 grep -q '^storage remove.*--path workspace --recursive' "$MOCK_LOG"
 test "$before_reset_rest_count" = "$(grep -c '^rest --method' "$MOCK_LOG" || true)"
+test "$(grep -c '^containerapp job start' "$MOCK_LOG")" -eq $((before_reset_job_start_count + 1))
+grep -q '^containerapp job execution show.*code-server-ol8-alice-init' "$MOCK_LOG"
+
+export MOCK_JOB_EXECUTION_STATUS=Failed
+if printf 'reset alice\n' | "$REPO_DIR/aca-instance.sh" --config "$TEST_DIR/config.env" \
+    reset alice >/dev/null 2>"$TEST_DIR/reset-job-failure.err"; then
+    echo 'reset ignored a failed init Job execution' >&2
+    exit 1
+fi
+grep -q 'init Job execution' "$TEST_DIR/reset-job-failure.err"
+export MOCK_JOB_EXECUTION_STATUS=Succeeded
 if grep -E '^storage (remove|directory exists)' "$MOCK_LOG" | grep -q -- '--account-key test-key'; then
     echo 'reset exposed the storage key in command arguments' >&2
     exit 1
@@ -414,6 +455,8 @@ printf 'Stopped\n' > "$MOCK_RUNNING"
 printf 'alice\n' | "$REPO_DIR/aca-instance.sh" --config "$TEST_DIR/config.env" delete alice >/dev/null
 test ! -e "$TEST_DIR/passwords/alice/password"
 grep -q 'containerapp delete.*code-server-ol8-alice' "$MOCK_LOG"
+grep -q '^containerapp job delete.*code-server-ol8-alice-init' "$MOCK_LOG"
+test ! -f "$MOCK_JOB_STATE"
 grep -q 'share-rm delete.*code-server-alice' "$MOCK_LOG"
 
 echo 'aca-instance tests: PASS'

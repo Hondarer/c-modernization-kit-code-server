@@ -12,6 +12,7 @@
 | ACR pull用Managed Identity | 共有 | `id-code-server-acrpull` |
 | Storage Account | 共有 | `stcodeserver<suffix>` |
 | Container App / FQDN | 利用者ごと | `code-server-ol8-alice` |
+| init Job (Manual trigger) | 利用者ごと | `code-server-ol8-alice-init` |
 | Container Apps Secret | 利用者ごと | `code-server-password` |
 | Azure Files Share | 利用者ごと | `code-server-alice` |
 | ローカルパスワード | 利用者ごと | `$HOME/.azure/code-server-aca/instances/alice/password` |
@@ -48,9 +49,10 @@ AZURE_CORE_ONLY_SHOW_ERRORS=false ./aca-instance.sh doctor
 1. mode 600の一意なパスワードを生成する。
 2. 個別File Shareと`home`、`workspace`を作成する。
 3. Container Apps Environmentへ個別ストレージを登録する。
-4. App固有SecretとHTTPS ingressを持つContainer Appを作成する。
-5. Single revision、`min=1`、`max=1`へ設定する。
-6. `/healthz`成功後にURLとパスワードを表示する。
+4. 専用のinit Jobを実行し、`home`へ既定設定・拡張機能を事前に導入する(後述)。
+5. App固有SecretとHTTPS ingressを持つContainer Appを作成する。
+6. Single revision、`min=1`、`max=1`へ設定する。
+7. `/healthz`成功後にURLとパスワードを表示する。
 
 既存Appがあるのにローカルパスワードファイルがない場合は、Secretを上書きせずエラーに
 します。
@@ -130,6 +132,10 @@ stateDiagram-v2
 
 停止・開始にはContainer Appsのstable REST API `2025-07-01`を`az rest`経由で使用します。
 `az containerapp job start/stop`はContainer Apps Job用であり、通常のAppには使用しません。
+ここで言うJobは通常Appの起動・停止遷移とは無関係で、後述する「init Job」(`create`/`reset`
+時にhomeへ既定設定・拡張機能を事前導入する一度きりのJob)を指します。init Jobは
+`az containerapp job start`で実行しますが、これはAppのRunning/Stopped遷移をJobで代替する
+ものではありません。
 
 suspend中もURL、Secret、Azure Files Share、`min=1` / `max=1`の設定は維持されます。
 レプリカが0の間はContainer Appsのリソース消費課金は発生しませんが、ACRの日次料金、
@@ -180,11 +186,20 @@ snapshot、ACL、Azure固有メタデータを完全に復元するバックア�
 passwordファイル、File Share自体は変更せず、処理後もStoppedのままです。自動バックアップは
 行わず、実行には`reset <slug>`の完全一致確認が必要です。
 
-次回`resume`でAppに現在割り当てられているイメージが起動すると、entrypointが空のhomeを
-準備します。その後、イメージ内VSIXから初期拡張機能を導入・検証し、最後に既定の
-`settings.json`を配置します。`resume`がhealth checkに成功した時点で初期化完了です。
-作業ツリーの`src/code-server-defaults`を直接参照する処理ではないため、未公開の変更は反映
-されません。
+空ディレクトリの再作成に続けて、`reset`は専用のinit Job(`<App名>-init`)を実行し、
+イメージ内VSIXから初期拡張機能を導入・検証し、既定の`settings.json`を配置します。
+Azure Files(SMB)は拡張機能の再展開にローカルディスクより時間がかかり、Container Apps
+の既定startup probe猶予を超えるとAppがCrashLoopBackOffになるため、ingress・startup probe
+付きのAppを起動する前に、この初期化を完了させておきます。init Jobが失敗した場合は
+`reset`自体がエラー終了し、Appは初期化未完了のままStoppedを維持します(次回`resume`は
+実行しないでください。原因を解消して`reset`を再実行します)。init Job成功後の`resume`は
+既にdefaultsが揃った状態でAppを起動するだけなので高速です。作業ツリーの
+`src/code-server-defaults`を直接参照する処理ではないため、未公開の変更は反映されません。
+
+init Jobの実行時間は拡張機能の数とAzure FilesのI/O速度に依存し、実測では拡張1件あたり
+1〜2分程度、17件で15分前後かかることがあります。`reset`はJobの完了を最大30分
+(`replicaTimeout`と同じ)待機します。ローカルのpodman(ローカルディスク)では同じ処理が
+数十秒で終わるため、この差はAzure Files固有の制約です。
 
 Azure Filesの削除・再作成はトランザクションではありません。途中で失敗した場合もAppは
 Stoppedのままなので、エラー原因を解消して同じ`reset`を再実行してください。
@@ -239,8 +254,9 @@ Healthyかつ`RunningAtMaxScale`であることを確認してから再試行し
 ./aca-instance.sh delete alice
 ```
 
-スラッグの再入力後、Container App、環境ストレージ登録、File Share、ローカルパスワードを
-削除します。Azure側の削除が失敗した場合はパスワードファイルを保持します。
+スラッグの再入力後、Container App、init Job、環境ストレージ登録、File Share、
+ローカルパスワードを削除します。Azure側の削除が失敗した場合はパスワードファイルを
+保持します。
 
 共有Resource Group全体の削除は`aca-environment.sh delete`を使用します。
 

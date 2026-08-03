@@ -11,6 +11,7 @@ export AZURE_CORE_ONLY_SHOW_ERRORS="${AZURE_CORE_ONLY_SHOW_ERRORS:-true}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${CODE_SERVER_ACA_CONFIG:-${HOME}/.azure/code-server-aca.env}"
 TEMPLATE_FILE="${SCRIPT_DIR}/docs/azure-container-apps-persistent.yaml.template"
+JOB_TEMPLATE_FILE="${SCRIPT_DIR}/docs/azure-container-apps-init-job.yaml.template"
 
 usage() {
     cat <<'EOF'
@@ -76,22 +77,29 @@ FILE_SHARE_QUOTA_GIB="${FILE_SHARE_QUOTA_GIB:-10}"
 CONTAINER_APP_LIFECYCLE_API_VERSION="2025-07-01"
 LIFECYCLE_WAIT_ATTEMPTS=60
 LIFECYCLE_WAIT_INTERVAL_SECONDS=5
+# init Jobの拡張機能再展開はAzure Files(SMB)のI/O遅延で数分〜十数分かかることがあるため、
+# App自体のRunning/Stopped遷移より大幅に長い猶予を用意する。Jobのreplica-timeout(1800秒)
+# と揃える。
+JOB_WAIT_ATTEMPTS=120
+JOB_WAIT_INTERVAL_SECONDS=15
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
 validate_slug() {
-    local slug="$1" app_name share_name storage_name
+    local slug="$1" app_name share_name storage_name job_name
     [[ "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] ||
         die "Invalid instance slug '${slug}'; use lowercase letters, numbers and single hyphens."
     app_name="${APP_NAME_PREFIX}-${slug}"
     share_name="${FILE_SHARE_PREFIX}-${slug}"
     storage_name="${ENV_STORAGE_PREFIX}-${slug}-storage"
+    job_name="${app_name}-init"
     [ "${#app_name}" -le 32 ] || die "Container App name exceeds 32 characters: ${app_name}"
     [ "${#share_name}" -ge 3 ] && [ "${#share_name}" -le 63 ] ||
         die "Azure Files share name must contain 3-63 characters: ${share_name}"
     [ "${#storage_name}" -le 63 ] || die "Environment storage name is too long: ${storage_name}"
+    [ "${#job_name}" -le 32 ] || die "init Job name exceeds 32 characters: ${job_name}"
 }
 
 set_instance_vars() {
@@ -100,6 +108,7 @@ set_instance_vars() {
     APP_NAME="${APP_NAME_PREFIX}-${INSTANCE_SLUG}"
     FILE_SHARE="${FILE_SHARE_PREFIX}-${INSTANCE_SLUG}"
     ENV_STORAGE_NAME="${ENV_STORAGE_PREFIX}-${INSTANCE_SLUG}-storage"
+    JOB_NAME="${APP_NAME}-init"
     INSTANCE_PASSWORD_DIR="${PASSWORD_DIR}/${INSTANCE_SLUG}"
     PASSWORD_FILE="${INSTANCE_PASSWORD_DIR}/password"
     if [ "$INSTANCE_SLUG" = "1" ] && [ ! -s "$PASSWORD_FILE" ] &&
@@ -256,6 +265,72 @@ wait_for_health() {
     die "Health check failed after 120 seconds: https://${fqdn}/healthz"
 }
 
+wait_for_job_execution() {
+    local execution_name="$1" attempt status=Unknown
+    for attempt in $(seq 1 "$JOB_WAIT_ATTEMPTS"); do
+        status="$(az containerapp job execution show -g "$RESOURCE_GROUP" -n "$JOB_NAME" \
+            --job-execution-name "$execution_name" --query properties.status -o tsv)"
+        status="${status:-Unknown}"
+        case "$status" in
+            Succeeded) return 0 ;;
+            Failed) die "init Job execution ${execution_name} failed for ${JOB_NAME}." ;;
+        esac
+        sleep "$JOB_WAIT_INTERVAL_SECONDS"
+    done
+    die "Timed out waiting for init Job execution ${execution_name} to finish; last status: ${status}."
+}
+
+# home/workspace の初期化 (既定設定・拡張機能の導入) を、ingress・startup probe付きの
+# App起動より前に、専用のinit Jobとして完了させる。Azure Filesは拡張機能の再展開に
+# ローカルディスクより時間がかかり、Container Appsの既定startup probe猶予を超えると
+# CrashLoopBackOffになるため、Appを起動する前にここで初期化を終わらせておく。
+run_init_job() {
+    local password rendered_yaml execution_name
+    [ -f "$JOB_TEMPLATE_FILE" ] || die "init Job template not found: ${JOB_TEMPLATE_FILE}"
+    password="$(password_for_instance)"
+
+    rendered_yaml="$(mktemp "/tmp/${JOB_NAME}.XXXXXX.yaml")"
+    trap 'rm -f "${rendered_yaml:-}"' RETURN
+    sed \
+        -e "s|__IDENTITY_ID__|${IDENTITY_ID}|g" \
+        -e "s|__LOCATION__|${LOCATION}|g" \
+        -e "s|__JOB_NAME__|${JOB_NAME}|g" \
+        -e "s|__RESOURCE_GROUP__|${RESOURCE_GROUP}|g" \
+        -e "s|__ENVIRONMENT_ID__|${ENVIRONMENT_ID}|g" \
+        -e "s|__ACR_LOGIN_SERVER__|${ACR_LOGIN_SERVER}|g" \
+        -e "s|__REMOTE_IMAGE__|${REMOTE_IMAGE}|g" \
+        -e "s|__ENV_STORAGE_NAME__|${ENV_STORAGE_NAME}|g" \
+        "$JOB_TEMPLATE_FILE" > "$rendered_yaml"
+    if grep -qE '__[A-Z_]+__' "$rendered_yaml"; then
+        die "Unresolved placeholder in rendered init Job YAML: ${rendered_yaml}"
+    fi
+
+    if ! az containerapp job show -g "$RESOURCE_GROUP" -n "$JOB_NAME" >/dev/null 2>&1; then
+        # secretsブロックは値を持たないため(Secretの値をtemplateへ含めない方針)、
+        # 新規作成時はまずCLI引数で値付きのSecretを確立してから、YAMLで残りの構成
+        # (volumes/command/registries等)を適用する。App作成と同じ二段階パターン。
+        az containerapp job create -g "$RESOURCE_GROUP" -n "$JOB_NAME" \
+            --environment "$ENVIRONMENT_NAME" --trigger-type Manual \
+            --replica-timeout 1800 --replica-retry-limit 0 \
+            --replica-completion-count 1 --parallelism 1 \
+            --image "$REMOTE_IMAGE" --mi-user-assigned "$IDENTITY_ID" \
+            --registry-server "$ACR_LOGIN_SERVER" --registry-identity "$IDENTITY_ID" \
+            --secrets "code-server-password=${password}" \
+            -o none
+    fi
+    az containerapp job update -g "$RESOURCE_GROUP" -n "$JOB_NAME" --yaml "$rendered_yaml" -o none
+    az containerapp job secret set -g "$RESOURCE_GROUP" -n "$JOB_NAME" \
+        --secrets "code-server-password=${password}" -o none
+    unset password
+
+    echo "Running init Job ${JOB_NAME} to pre-populate home/workspace..." >&2
+    execution_name="$(az containerapp job start -g "$RESOURCE_GROUP" -n "$JOB_NAME" \
+        --query name -o tsv)"
+    [ -n "$execution_name" ] || die "Could not determine execution name for ${JOB_NAME}."
+    wait_for_job_execution "$execution_name"
+    echo "init Job ${JOB_NAME} completed successfully." >&2
+}
+
 tag_app() {
     local app_id
     app_id="$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" --query id -o tsv)"
@@ -337,6 +412,8 @@ create_instance() {
         --azure-file-account-name "$STORAGE_ACCOUNT" --azure-file-account-key "$storage_key" \
         --azure-file-share-name "$FILE_SHARE" --access-mode ReadWrite -o none
     unset storage_key
+
+    run_init_job
 
     if [ "$app_exists" = false ]; then
         az containerapp create -g "$RESOURCE_GROUP" -n "$APP_NAME" --environment "$ENVIRONMENT_NAME" \
@@ -500,6 +577,10 @@ rotate_password() {
     chmod 600 "$candidate_file"
     az containerapp secret set -g "$RESOURCE_GROUP" -n "$APP_NAME" \
         --secrets "code-server-password=${candidate}" -o none
+    if az containerapp job show -g "$RESOURCE_GROUP" -n "$JOB_NAME" >/dev/null 2>&1; then
+        az containerapp job secret set -g "$RESOURCE_GROUP" -n "$JOB_NAME" \
+            --secrets "code-server-password=${candidate}" -o none
+    fi
     mv -f "$candidate_file" "${INSTANCE_PASSWORD_DIR}/password"
     PASSWORD_FILE="${INSTANCE_PASSWORD_DIR}/password"
     revision="$(az containerapp revision list -g "$RESOURCE_GROUP" -n "$APP_NAME" \
@@ -564,8 +645,11 @@ reset_instance() {
     local confirmation storage_key directory exists
     set_instance_vars "$1"
     require_command az
+    require_command sed
     az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" >/dev/null
     require_stopped_instance reset
+    [ -s "$PASSWORD_FILE" ] || die "Password file not found: ${PASSWORD_FILE}"
+    load_shared_values
     az storage share-rm show -g "$RESOURCE_GROUP" --storage-account "$STORAGE_ACCOUNT" \
         -n "$FILE_SHARE" >/dev/null 2>&1 || die "Azure Files share not found: ${FILE_SHARE}"
 
@@ -600,23 +684,29 @@ reset_instance() {
         [ "$exists" = "true" ] || die "Azure Files directory was not recreated: ${directory}"
     done
     unset storage_key
-    printf 'Reset instance data for %s; the instance remains stopped.\n' "$INSTANCE_SLUG"
-    printf "Run './aca-instance.sh resume %s' to install defaults and start code-server.\n" \
+
+    run_init_job
+
+    printf 'Reset instance data for %s; defaults are pre-installed and the instance remains stopped.\n' \
         "$INSTANCE_SLUG"
+    printf "Run './aca-instance.sh resume %s' to start code-server.\n" "$INSTANCE_SLUG"
 }
 
 delete_instance() {
     local confirmation failed=0
     set_instance_vars "$1"
     echo "This permanently deletes:" >&2
-    printf '  Container App: %s\n  Environment storage: %s\n  File Share: %s\n  Password: %s\n' \
-        "$APP_NAME" "$ENV_STORAGE_NAME" "$FILE_SHARE" "$PASSWORD_FILE" >&2
+    printf '  Container App: %s\n  init Job: %s\n  Environment storage: %s\n  File Share: %s\n  Password: %s\n' \
+        "$APP_NAME" "$JOB_NAME" "$ENV_STORAGE_NAME" "$FILE_SHARE" "$PASSWORD_FILE" >&2
     printf "Type '%s' to continue: " "$INSTANCE_SLUG" >&2
     IFS= read -r confirmation
     [ "$confirmation" = "$INSTANCE_SLUG" ] || die "Confirmation did not match; nothing was deleted."
 
     if az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" >/dev/null 2>&1; then
         az containerapp delete -g "$RESOURCE_GROUP" -n "$APP_NAME" --yes -o none || failed=1
+    fi
+    if az containerapp job show -g "$RESOURCE_GROUP" -n "$JOB_NAME" >/dev/null 2>&1; then
+        az containerapp job delete -g "$RESOURCE_GROUP" -n "$JOB_NAME" --yes -o none || failed=1
     fi
     if az containerapp env storage show -g "$RESOURCE_GROUP" -n "$ENVIRONMENT_NAME" \
         --storage-name "$ENV_STORAGE_NAME" >/dev/null 2>&1; then
