@@ -48,7 +48,11 @@ Do not delete or reset those paths unless explicitly authorized.
 
 - Use one Container App per user, not multiple replicas of one App. Each user must have a unique
   URL, password Secret, Azure Files Share, `/home/user`, and `/workspace`.
-- Keep every App in Single revision mode with `minReplicas=1` and `maxReplicas=1`.
+- Keep every App in Single revision mode with `maxReplicas=1`. Scaling-disabled Apps use
+  `minReplicas=1`; scaling-enabled Apps use the configured `minReplicas` (default 0), an explicit
+  HTTP rule, and the configured cooldown period (default 3600 seconds).
+- Allocate each code-server App from the external deployment config, defaulting to 4.0 vCPU / 8Gi.
+  Keep the per-instance init Job at 1.0 vCPU / 2Gi because Azure Files I/O is its main bottleneck.
 - Store deployment config and password files under `$HOME/.azure`, outside Git. Password files
   must be mode 600 and unique. `aca-instance.sh list` and `show` intentionally expose passwords;
   never run them in shared screens, CI logs, or shell traces.
@@ -74,8 +78,12 @@ Do not delete or reset those paths unless explicitly authorized.
   confirmation. It may replace only the share's `home` and `workspace` directories, then runs the
   init Job to pre-populate defaults, and must not start the App itself. The next explicit `resume`
   only starts the App; defaults are already installed by the init Job.
-- Roll out image updates sequentially. Update one user, verify the new image, Healthy state,
-  traffic 100%, login, and persistent workspace, then update the next user and repeat.
+- Roll out image, resource, and scaling updates sequentially. Update one user, verify the desired
+  image and resources, Healthy state, traffic 100%, login, and persistent workspace, then update
+  the next user and repeat.
+- `aca-environment.sh publish` records the target scaling settings but does not mutate Apps.
+  Apply those settings sequentially with `aca-instance.sh update`; a `create` override is replaced
+  by the next update using the published settings.
 - To update a stopped App, explicitly resume, update and verify it, then suspend it again if
   required. Keep any ACR image still referenced by a stopped App.
 - A correct password POST to `/login` returns 302. Another user's password remains on the login

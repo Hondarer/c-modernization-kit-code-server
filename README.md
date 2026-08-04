@@ -49,14 +49,14 @@ podman exec code-server-ol8_1 \
 ```bash
 ./aca-environment.sh init
 ./aca-environment.sh create
-./aca-environment.sh publish
+./aca-environment.sh publish --scaling-mode enabled --cooldown-period 3600
 ./aca-instance.sh create alice
 ./aca-instance.sh create bob
 ./aca-instance.sh list
 ./aca-instance.sh suspend alice
+./aca-instance.sh resume alice
 ./aca-instance.sh download alice ./backups/
 ./aca-instance.sh reset alice
-./aca-instance.sh resume alice
 ```
 
 認証情報、Azure設定、利用者パスワードは`$HOME/.azure`へ保存され、リポジトリには
@@ -67,6 +67,10 @@ podman exec code-server-ol8_1 \
 を参照してください。`download`は利用者別の`home`と`workspace`をローカルのtar.gzへ
 書き出します。`reset`は停止中の永続データを空にし、次回`resume`時に既定設定と拡張機能を
 再初期化します。
+
+`publish`で選んだスケーリング設定は後続の`create`と利用者別`update`へ適用されます。
+スケーリング有効時は既定で60分無通信の後に0 replicaとなり、次のHTTPアクセスで
+自動的に起動します。これはAppを`Stopped`にする`suspend`とは異なります。
 
 利用者インスタンスを完全に削除する場合は、破壊操作として個別に実行します。
 

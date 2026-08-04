@@ -21,8 +21,22 @@ export MOCK_WORKSPACE_DIR="$TEST_DIR/workspace-directory-exists"
 export MOCK_REMOVE_FAILURE=false
 export MOCK_KEY_FAILURE=false
 export MOCK_CREATE_FAILURE=''
+export MOCK_MIN="$TEST_DIR/min-replicas"
+export MOCK_MAX="$TEST_DIR/max-replicas"
+export MOCK_COOLDOWN="$TEST_DIR/cooldown-period"
+export MOCK_RULE="$TEST_DIR/scale-rule"
+export MOCK_REPLICAS="$TEST_DIR/replicas"
+export MOCK_CPU="$TEST_DIR/container-cpu"
+export MOCK_MEMORY="$TEST_DIR/container-memory"
 printf 'Succeeded\n' > "$MOCK_PROVISIONING"
 printf 'Running\n' > "$MOCK_RUNNING"
+printf '1\n' > "$MOCK_MIN"
+printf '1\n' > "$MOCK_MAX"
+: > "$MOCK_COOLDOWN"
+: > "$MOCK_RULE"
+printf '1\n' > "$MOCK_REPLICAS"
+printf '1.0\n' > "$MOCK_CPU"
+printf '2Gi\n' > "$MOCK_MEMORY"
 
 cat > "$TEST_DIR/config.env" <<EOF
 RESOURCE_GROUP=rg-test
@@ -59,6 +73,7 @@ case "$1 $2" in
         case "$3" in
             show) [ -f "$MOCK_SHARE" ] || exit 1 ;;
             create) touch "$MOCK_SHARE" ;;
+            delete) rm -f "$MOCK_SHARE" ;;
         esac
         ;;
     "storage file")
@@ -131,14 +146,35 @@ case "$1 $2" in
             *"properties.provisioningState"*) cat "$MOCK_PROVISIONING" ;;
             *"properties.runningStatus"*) cat "$MOCK_RUNNING" ;;
             *"properties.template.volumes[0].storageName"*) echo 'code-server-alice-storage' ;;
-            *"properties.template.scale.minReplicas"*) echo '1' ;;
-            *"properties.template.scale.maxReplicas"*) echo '1' ;;
+            *"properties.template.scale.minReplicas"*) cat "$MOCK_MIN" ;;
+            *"properties.template.scale.maxReplicas"*) cat "$MOCK_MAX" ;;
+            *"properties.template.scale.cooldownPeriod"*) cat "$MOCK_COOLDOWN" ;;
+            *"properties.template.scale.rules[0].name"*) cat "$MOCK_RULE" ;;
+            *"properties.template.containers[0].resources.cpu"*) cat "$MOCK_CPU" ;;
+            *"properties.template.containers[0].resources.memory"*) cat "$MOCK_MEMORY" ;;
             *"properties.template.containers[0].image"*) echo 'acrtest.azurecr.io/code-server-ol8:test' ;;
             *"--query id"*) echo '/subscriptions/test/resourceGroups/rg-test/providers/Microsoft.App/containerApps/code-server-ol8-alice' ;;
             *) echo '{}' ;;
         esac
         ;;
     "containerapp create") touch "$MOCK_STATE" ;;
+    "containerapp delete") rm -f "$MOCK_STATE" ;;
+    "containerapp update")
+        yaml=''
+        while [ "$#" -gt 0 ]; do
+            if [ "$1" = "--yaml" ]; then yaml="$2"; break; fi
+            shift
+        done
+        if [ -n "$yaml" ]; then
+            sed -n 's/^          cpu: //p' "$yaml" > "$MOCK_CPU"
+            sed -n 's/^          memory: //p' "$yaml" > "$MOCK_MEMORY"
+            sed -n 's/^      minReplicas: //p' "$yaml" > "$MOCK_MIN"
+            sed -n 's/^      maxReplicas: //p' "$yaml" > "$MOCK_MAX"
+            cooldown="$(sed -n 's/^      cooldownPeriod: //p' "$yaml")"
+            [ "$cooldown" != null ] && printf '%s\n' "$cooldown" > "$MOCK_COOLDOWN" || : > "$MOCK_COOLDOWN"
+            grep -q 'code-server-http' "$yaml" && printf 'code-server-http\n' > "$MOCK_RULE" || : > "$MOCK_RULE"
+        fi
+        ;;
     "containerapp job")
         case "$3" in
             show) [ -f "$MOCK_JOB_STATE" ] || exit 1 ;;
@@ -161,9 +197,13 @@ case "$1 $2" in
         esac
         ;;
     "containerapp list")
-        printf 'code-server-ol8-alice\tcode-server-ol8-alice.test.azurecontainerapps.io\t%s\t%s\n' \
-            "$(cat "$MOCK_PROVISIONING")" "$(cat "$MOCK_RUNNING")"
+        cooldown="$(cat "$MOCK_COOLDOWN")"
+        rule="$(cat "$MOCK_RULE")"
+        printf 'code-server-ol8-alice\tcode-server-ol8-alice.test.azurecontainerapps.io\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$(cat "$MOCK_PROVISIONING")" "$(cat "$MOCK_RUNNING")" "$(cat "$MOCK_MIN")" \
+            "$(cat "$MOCK_MAX")" "${cooldown:--}" "${rule:--}"
         ;;
+    "containerapp replica") cat "$MOCK_REPLICAS" ;;
     "containerapp revision")
         if [ "$3" = "list" ]; then echo 'code-server-ol8-alice--active'; fi
         ;;
@@ -192,6 +232,27 @@ if "$REPO_DIR/aca-instance.sh" --config "$TEST_DIR/config.env" create 'Bad_Name'
     echo 'invalid slug was accepted' >&2
     exit 1
 fi
+if "$REPO_DIR/aca-instance.sh" --config "$TEST_DIR/config.env" create alice \
+    --scaling-mode disabled --min-replicas 0 >/dev/null 2>&1; then
+    echo 'create accepted min replicas with disabled scaling' >&2
+    exit 1
+fi
+test ! -e "$MOCK_STATE"
+
+cp "$TEST_DIR/config.env" "$TEST_DIR/invalid-resources.env"
+printf '\nCONTAINER_APP_CPU=4.0\nCONTAINER_APP_MEMORY=4Gi\n' >> "$TEST_DIR/invalid-resources.env"
+if "$REPO_DIR/aca-instance.sh" --config "$TEST_DIR/invalid-resources.env" create alice \
+    >/dev/null 2>&1; then
+    echo 'create accepted an invalid Container App resource pair' >&2
+    exit 1
+fi
+test ! -e "$MOCK_STATE"
+if "$REPO_DIR/aca-instance.sh" --config "$TEST_DIR/config.env" create alice \
+    --scaling-mode enabled --cooldown-period invalid >/dev/null 2>&1; then
+    echo 'create accepted an invalid cooldown period' >&2
+    exit 1
+fi
+test ! -e "$MOCK_STATE"
 
 create_output="$($REPO_DIR/aca-instance.sh --config "$TEST_DIR/config.env" create alice)"
 grep -q $'alice\thttps://code-server-ol8-alice.test.azurecontainerapps.io/' <<< "$create_output"
@@ -204,6 +265,12 @@ grep -q 'containerapp job create.*code-server-ol8-alice-init' "$MOCK_LOG"
 grep -q '^containerapp job start -g rg-test -n code-server-ol8-alice-init' "$MOCK_LOG"
 grep -q 'containerapp job secret set.*code-server-ol8-alice-init' "$MOCK_LOG"
 test -f "$MOCK_JOB_STATE"
+test "$(cat "$MOCK_CPU")" = 4.0
+test "$(cat "$MOCK_MEMORY")" = 8Gi
+grep -A2 '^        resources:' "$REPO_DIR/docs/azure-container-apps-init-job.yaml.template" | \
+    grep -q 'cpu: 1.0'
+grep -A2 '^        resources:' "$REPO_DIR/docs/azure-container-apps-init-job.yaml.template" | \
+    grep -q 'memory: 2Gi'
 
 before_count="$(grep -c '^containerapp create' "$MOCK_LOG")"
 before_job_create_count="$(grep -c '^containerapp job create' "$MOCK_LOG")"
@@ -213,13 +280,29 @@ test "$before_count" = "$after_count"
 test "$before_job_create_count" = "$(grep -c '^containerapp job create' "$MOCK_LOG")"
 grep -q $'alice\thttps://code-server-ol8-alice.test.azurecontainerapps.io/' <<< "$second_output"
 
-list_output="$($REPO_DIR/aca-instance.sh --config "$TEST_DIR/config.env" list)"
-grep -q $'INSTANCE\tURL\tPASSWORD\tPROVISIONING\tRUNNING' <<< "$list_output"
-grep -q $'alice\thttps://code-server-ol8-alice.test.azurecontainerapps.io/' <<< "$list_output"
-grep -q $'Succeeded\tRunning' <<< "$list_output"
+cp "$TEST_DIR/config.env" "$TEST_DIR/custom-resources.env"
+printf '\nCONTAINER_APP_CPU=2.0\nCONTAINER_APP_MEMORY=4Gi\n' >> "$TEST_DIR/custom-resources.env"
+"$REPO_DIR/aca-instance.sh" --config "$TEST_DIR/custom-resources.env" update alice >/dev/null
+test "$(cat "$MOCK_CPU")" = 2.0
+test "$(cat "$MOCK_MEMORY")" = 4Gi
+"$REPO_DIR/aca-instance.sh" --config "$TEST_DIR/config.env" update alice >/dev/null
+test "$(cat "$MOCK_CPU")" = 4.0
+test "$(cat "$MOCK_MEMORY")" = 8Gi
 
+list_output="$($REPO_DIR/aca-instance.sh --config "$TEST_DIR/config.env" list)"
+grep -q $'INSTANCE\tURL\tPASSWORD\tPROVISIONING\tRUNNING\tSCALING\tMIN\tMAX\tCOOLDOWN\tREPLICAS' <<< "$list_output"
+grep -q $'alice\thttps://code-server-ol8-alice.test.azurecontainerapps.io/' <<< "$list_output"
+grep -q $'Succeeded\tRunning\tDisabled\t1\t1\t-\t1' <<< "$list_output"
+
+printf '\nSCALING_MODE=enabled\nSCALING_MIN_REPLICAS=0\nSCALING_COOLDOWN_PERIOD=3600\n' >> "$TEST_DIR/config.env"
 "$REPO_DIR/aca-instance.sh" --config "$TEST_DIR/config.env" update alice >/dev/null
 grep -q 'containerapp update.*code-server-ol8-alice' "$MOCK_LOG"
+test "$(cat "$MOCK_MIN")" = 0
+test "$(cat "$MOCK_COOLDOWN")" = 3600
+test "$(cat "$MOCK_RULE")" = code-server-http
+printf '0\n' > "$MOCK_REPLICAS"
+scaled_list_output="$($REPO_DIR/aca-instance.sh --config "$TEST_DIR/config.env" list)"
+grep -q $'Succeeded\tRunning\tEnabled\t0\t1\t3600\t0' <<< "$scaled_list_output"
 
 before_stop_count="$(grep -c '/stop?api-version=2025-07-01' "$MOCK_LOG" || true)"
 suspend_output="$($REPO_DIR/aca-instance.sh --config "$TEST_DIR/config.env" suspend alice)"
@@ -460,5 +543,12 @@ grep -q 'containerapp delete.*code-server-ol8-alice' "$MOCK_LOG"
 grep -q '^containerapp job delete.*code-server-ol8-alice-init' "$MOCK_LOG"
 test ! -f "$MOCK_JOB_STATE"
 grep -q 'share-rm delete.*code-server-alice' "$MOCK_LOG"
+
+printf 'Running\n' > "$MOCK_RUNNING"
+"$REPO_DIR/aca-instance.sh" --config "$TEST_DIR/config.env" create bob \
+    --scaling-mode enabled --min-replicas 0 --cooldown-period 120 >/dev/null
+test "$(cat "$MOCK_MIN")" = 0
+test "$(cat "$MOCK_COOLDOWN")" = 120
+test "$(cat "$MOCK_RULE")" = code-server-http
 
 echo 'aca-instance tests: PASS'

@@ -17,7 +17,9 @@ Usage: ./aca-environment.sh [--config FILE] COMMAND [OPTIONS]
 Commands:
   init                       Create a local deployment configuration
   create                     Create or validate the shared Azure resources
-  publish [IMAGE]            Build, verify and push an immutable image
+  publish [IMAGE] [--scaling-mode disabled|enabled]
+                  [--min-replicas 0|1] [--cooldown-period SECONDS]
+                             Build, verify and push an immutable image
   doctor                     Validate CLI access and shared Azure resources
   delete [--purge-local-state]
                              Delete the resource group after confirmation
@@ -33,6 +35,20 @@ die() {
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+validate_scaling_values() {
+    local mode="$1" min_replicas="$2" cooldown_period="$3"
+    case "$mode" in
+        disabled|enabled) ;;
+        *) die "Invalid scaling mode '${mode}'; use disabled or enabled." ;;
+    esac
+    case "$min_replicas" in
+        0|1) ;;
+        *) die "Invalid min replicas '${min_replicas}'; use 0 or 1." ;;
+    esac
+    [[ "$cooldown_period" =~ ^[0-9]+$ ]] && [ "$cooldown_period" -le 2147483647 ] ||
+        die "Invalid cooldown period '${cooldown_period}'; use 0-2147483647 seconds."
 }
 
 if [ "${1:-}" = "--config" ]; then
@@ -81,6 +97,9 @@ load_config() {
     : "${STORAGE_ACCOUNT:?STORAGE_ACCOUNT is required in ${CONFIG_FILE}}"
     : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required in ${CONFIG_FILE}}"
     PASSWORD_DIR="${PASSWORD_DIR:-${HOME}/.azure/code-server-aca/instances}"
+    SCALING_MODE="${SCALING_MODE:-disabled}"
+    SCALING_MIN_REPLICAS="${SCALING_MIN_REPLICAS:-0}"
+    SCALING_COOLDOWN_PERIOD="${SCALING_COOLDOWN_PERIOD:-3600}"
 }
 
 tag_resource() {
@@ -173,14 +192,53 @@ doctor_environment() {
 }
 
 publish_image() {
-    local image="${1:-code-server-ol8}" source_hash image_tag login_server remote_image
-    local token config_dir temporary_config digest
-    [ "$#" -le 1 ] || die "publish accepts at most one image name."
+    local image=code-server-ol8 image_seen=false source_hash image_tag login_server remote_image
+    local token config_dir temporary_config digest mode_arg='' min_arg='' cooldown_arg=''
+    local mode min_replicas cooldown_period min_was_set=false cooldown_was_set=false
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --scaling-mode)
+                [ "$#" -ge 2 ] || die "--scaling-mode requires disabled or enabled."
+                mode_arg="$2"
+                shift 2
+                ;;
+            --min-replicas)
+                [ "$#" -ge 2 ] || die "--min-replicas requires 0 or 1."
+                min_arg="$2"
+                min_was_set=true
+                shift 2
+                ;;
+            --cooldown-period)
+                [ "$#" -ge 2 ] || die "--cooldown-period requires seconds."
+                cooldown_arg="$2"
+                cooldown_was_set=true
+                shift 2
+                ;;
+            --*) die "Unknown publish option: $1" ;;
+            *)
+                [ "$image_seen" = false ] || die "publish accepts at most one image name."
+                image="$1"
+                image_seen=true
+                shift
+                ;;
+        esac
+    done
     load_config
+    mode="${mode_arg:-$SCALING_MODE}"
+    min_replicas="${min_arg:-$SCALING_MIN_REPLICAS}"
+    cooldown_period="${cooldown_arg:-$SCALING_COOLDOWN_PERIOD}"
+    validate_scaling_values "$mode" "$min_replicas" "$cooldown_period"
+    if [ "$mode" = disabled ] && { [ "$min_was_set" = true ] || [ "$cooldown_was_set" = true ]; }; then
+        die "--min-replicas and --cooldown-period require --scaling-mode enabled."
+    fi
+    if [ "$mode" = enabled ] && [ "$min_replicas" = 1 ]; then
+        echo "Warning: scaling is enabled with min replicas 1; the App will not scale to zero." >&2
+    fi
     require_command az
     require_command podman
     require_command tar
     require_command sha256sum
+    require_command awk
 
     "${SCRIPT_DIR}/build-pod.sh"
     "${SCRIPT_DIR}/verify-defaults.sh" "$image"
@@ -201,11 +259,31 @@ publish_image() {
     config_dir="$(dirname "$CONFIG_FILE")"
     temporary_config="$(mktemp "${config_dir}/.code-server-aca.env.XXXXXX")"
     trap 'rm -f "${temporary_config:-}"' RETURN
-    sed "s/^IMAGE_TAG=.*/IMAGE_TAG=${image_tag}/" "$CONFIG_FILE" > "$temporary_config"
+    awk -v image_tag="$image_tag" -v mode="$mode" -v min_replicas="$min_replicas" \
+        -v cooldown_period="$cooldown_period" '
+        BEGIN { image_seen=mode_seen=min_seen=cooldown_seen=0 }
+        /^IMAGE_TAG=/ { print "IMAGE_TAG=" image_tag; image_seen=1; next }
+        /^SCALING_MODE=/ { print "SCALING_MODE=" mode; mode_seen=1; next }
+        /^SCALING_MIN_REPLICAS=/ { print "SCALING_MIN_REPLICAS=" min_replicas; min_seen=1; next }
+        /^SCALING_COOLDOWN_PERIOD=/ { print "SCALING_COOLDOWN_PERIOD=" cooldown_period; cooldown_seen=1; next }
+        { print }
+        END {
+            if (!image_seen) print "IMAGE_TAG=" image_tag
+            if (!mode_seen) print "SCALING_MODE=" mode
+            if (!min_seen) print "SCALING_MIN_REPLICAS=" min_replicas
+            if (!cooldown_seen) print "SCALING_COOLDOWN_PERIOD=" cooldown_period
+        }
+    ' "$CONFIG_FILE" > "$temporary_config"
     chmod 600 "$temporary_config"
     mv "$temporary_config" "$CONFIG_FILE"
     trap - RETURN
-    printf 'Image: %s\nDigest: %s\nConfig: %s\n' "$remote_image" "$digest" "$CONFIG_FILE"
+    if [ "$mode" = enabled ]; then
+        printf 'Image: %s\nDigest: %s\nScaling: enabled (min=%s, max=1, cooldown=%ss)\nConfig: %s\n' \
+            "$remote_image" "$digest" "$min_replicas" "$cooldown_period" "$CONFIG_FILE"
+    else
+        printf 'Image: %s\nDigest: %s\nScaling: disabled (min=1, max=1, cooldown=-)\nConfig: %s\n' \
+            "$remote_image" "$digest" "$CONFIG_FILE"
+    fi
 }
 
 delete_environment() {

@@ -11,6 +11,9 @@ description: 利用者ごとに固有 URL、password、Azure Files share を持�
 2. `./aca-environment.sh doctor` で共有基盤と CLI 前提を確認する。
 3. instance slug が script の制約を満たし、既存利用者と衝突しないことを確認する。
 4. `./aca-instance.sh create <slug>` で、1利用者につき1 Container App、1 password、1 file share を作成する。
+   必要なら明示オプションで固定1 replicaまたはHTTP scale-to-zeroを選択する。
+   AppのCPU・memoryは外部configから適用し、既定は4.0 vCPU / 8Giとする。init Jobは
+   1.0 vCPU / 2Giのままにする。
 5. 変更前に `show` または `list` で provisioning/running status を確認し、受付可能な操作を `docs/azure-container-apps-multi-instance.md` の状態表で判断する。
 6. 未利用時は `suspend`、再利用時は `resume` を使う。Stopped の instance を他の command で暗黙に起動しない。
 7. 更新は instance ごとに順番に行う。Stopped の instance は明示的に resume してから更新し、検証後に必要なら再度 suspend する。
@@ -22,7 +25,10 @@ description: 利用者ごとに固有 URL、password、Azure Files share を持�
 
 - 正しい password の `/login` が HTTP 302、誤った password と他 instance の password が HTTP 200 になることを確認する。
 - instance ごとの marker file が再起動後も残り、別 instance から見えないことを確認する。
-- revision mode は single、replica は min 1 / max 1、URL、secret、file share が instance ごとに固有であることを確認する。
+- revision mode はsingle、max replicaは1であることを確認する。スケーリング無効時はmin 1、
+  有効時は設定したmin/cooldownとHTTP rule、現在のreplica数を確認する。
+- AppのCPU・memoryが外部configの目標値と一致し、init Jobが1.0 vCPU / 2Giであることを確認する。
+- `list`の`Running / 0 replicas`はscale-to-zeroであり、明示的な`Stopped`とは区別する。
 - suspend 後は `Succeeded / Stopped`、resume 後は `Succeeded / Running` と `/healthz` 成功を確認する。resume 後も marker file が保持されることを確認する。
 - downloadしたtar.gzがmode 600で、`home/`と`workspace/`の両方を含むことを確認する。これは論理的な内容のexportであり、Azure Filesのsnapshotやmetadata backupとして扱わない。
 - resetは`Succeeded / Stopped`でだけ実行し、`reset <slug>`の確認を省略しない。Appを自動起動せず、空の`home`と`workspace`を再作成したことを確認する。

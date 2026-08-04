@@ -61,9 +61,17 @@ LOCATION=japaneast
 ENVIRONMENT_NAME=cae-code-server
 IDENTITY_NAME=id-code-server-acrpull
 IMAGE_REPOSITORY=code-server-ol8
+CONTAINER_APP_CPU=4.0
+CONTAINER_APP_MEMORY=8Gi
+SCALING_MODE=disabled
+SCALING_MIN_REPLICAS=0
+SCALING_COOLDOWN_PERIOD=3600
 ```
 
 Secretとパスワードはこのファイルに保存しません。
+CPU・memoryとスケーリング値はSecretではなく、次回の`create`/`update`で使う目標設定です。
+既存configにCPU・memoryがない場合も、Appには`4.0 vCPU / 8Gi`を適用します。init Jobは
+`1.0 vCPU / 2Gi`のままです。
 
 ## 2. 共有基盤の作成
 
@@ -85,6 +93,9 @@ Secretとパスワードはこのファイルに保存しません。
 
 ```bash
 ./aca-environment.sh publish
+
+./aca-environment.sh publish --scaling-mode enabled \
+    --min-replicas 0 --cooldown-period 3600
 ```
 
 このコマンドは次を実行します。
@@ -93,7 +104,12 @@ Secretとパスワードはこのファイルに保存しません。
 2. `verify-defaults.sh`でネットワークなしの起動検証を行う。
 3. `src`の内容ハッシュを含む不変タグを生成する。
 4. ACRの短期アクセストークンでrootless Podmanからpushする。
-5. ACR上のdigestを確認し、設定ファイルの`IMAGE_TAG`を原子的に更新する。
+5. ACR上のdigestを確認し、設定ファイルの`IMAGE_TAG`とスケーリング設定を原子的に更新する。
+
+`publish`は既存Appを変更しません。外部configのCPU・memoryと保存したスケーリング設定は
+新規`create`と、後続の利用者別`update`で
+順次反映します。オプション省略時は設定ファイルの現在値を維持し、旧設定ファイルでは
+後方互換の`disabled`を使用します。
 
 `build-pod.sh`は
 `ghcr.io/hondarer/oracle-linux-container/oracle-linux-8-dev:latest`を毎回pullします。
@@ -124,7 +140,7 @@ GHCRベースやACRが空の場合は大きなレイヤーを転送するため�
 ## インスタンスの実行状態
 
 各Appの実行状態は個別に管理します。停止中もURL、Secret、Azure Files、Single revision、
-`min=1` / `max=1`の設定は保持されます。
+スケーリング設定は保持されます。
 
 ```mermaid
 stateDiagram-v2
@@ -209,7 +225,7 @@ source "$HOME/.azure/code-server-aca.env"
 az resource list --resource-group "$RESOURCE_GROUP" --output table
 az containerapp list \
     --resource-group "$RESOURCE_GROUP" \
-    --query '[].{name:name,fqdn:properties.configuration.ingress.fqdn,image:properties.template.containers[0].image,provisioning:properties.provisioningState,running:properties.runningStatus,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas}' \
+    --query '[].{name:name,fqdn:properties.configuration.ingress.fqdn,image:properties.template.containers[0].image,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory,provisioning:properties.provisioningState,running:properties.runningStatus,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas,cooldown:properties.template.scale.cooldownPeriod,rule:properties.template.scale.rules[0].name}' \
     --output table
 ```
 
@@ -218,7 +234,9 @@ az containerapp list \
 - Appごとに異なるHTTPS URLと一意なパスワードがある。
 - 正しいパスワードだけが対応Appで認証される。
 - 稼働対象はActive/HealthyなRevisionが1つで`Running`、休止対象は`Stopped`である。
-- 全AppがSingle revision、`min=1`、`max=1`である。
+- 全AppがSingle revision、`max=1`である。スケーリング無効時は`min=1`、有効時は
+  設定したmin、cooldown、HTTP ruleである。
+- 全AppのCPU・memoryが外部configの目標値であり、init Jobは`1.0 vCPU / 2Gi`である。
 - `/home/user`と`/workspace`が利用者ごとのFile Shareへ永続化される。
 - 再起動後もファイル、既定設定、拡張機能が保持される。
 - HTTPはHTTPSへリダイレクトされる。

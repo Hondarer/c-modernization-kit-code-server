@@ -45,8 +45,8 @@ properties:
           - name: PASSWORD
             secretRef: code-server-password
         resources:
-          cpu: 1.0
-          memory: 2Gi
+          cpu: __CONTAINER_APP_CPU__
+          memory: __CONTAINER_APP_MEMORY__
         volumeMounts:
           - volumeName: code-data
             mountPath: /home/user
@@ -55,8 +55,10 @@ properties:
             mountPath: /workspace
             subPath: workspace
     scale:
-      minReplicas: 1
+      minReplicas: __MIN_REPLICAS__
       maxReplicas: 1
+      cooldownPeriod: __COOLDOWN_PERIOD__
+      rules: __SCALE_RULES__
     volumes:
       - name: code-data
         storageType: AzureFile

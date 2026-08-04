@@ -18,6 +18,9 @@ test "$(stat -c '%a' "$CONFIG_FILE")" = 600
 grep -q '^RESOURCE_GROUP=rg-code-server$' "$CONFIG_FILE"
 grep -q '^ENVIRONMENT_NAME=cae-code-server$' "$CONFIG_FILE"
 grep -Eq '^SUFFIX=[a-f0-9]{6}$' "$CONFIG_FILE"
+grep -q '^SCALING_MODE=disabled$' "$CONFIG_FILE"
+grep -q '^SCALING_MIN_REPLICAS=0$' "$CONFIG_FILE"
+grep -q '^SCALING_COOLDOWN_PERIOD=3600$' "$CONFIG_FILE"
 if "$REPO_DIR/aca-environment.sh" --config "$CONFIG_FILE" init >/dev/null 2>&1; then
     echo 'init overwrote an existing config' >&2
     exit 1
@@ -45,6 +48,8 @@ if [[ "$joined" == *" acr show "* ]]; then
     [[ "$joined" == *"loginServer"* ]] && echo 'acrtest.azurecr.io' || echo '/subscriptions/test/acr'
     exit 0
 fi
+if [[ "$joined" == *" acr login "* ]]; then echo 'test-token'; exit 0; fi
+if [[ "$joined" == *" acr repository show "* ]]; then echo 'sha256:test'; exit 0; fi
 if [[ "$joined" == *" identity create "* ]]; then touch "$MOCK_DIR/identity"; exit 0; fi
 if [[ "$joined" == *" identity show "* ]]; then
     [ -f "$MOCK_DIR/identity" ] || exit 1
@@ -66,7 +71,27 @@ fi
 exit 0
 EOF
 chmod +x "$TEST_DIR/bin/az"
+cat > "$TEST_DIR/bin/podman" <<'EOF'
+#!/bin/bash
+[ "${1:-}" != login ] || read -r _token || true
+exit 0
+EOF
+chmod +x "$TEST_DIR/bin/podman"
 export PATH="$TEST_DIR/bin:$PATH"
+
+config_hash="$(sha256sum "$CONFIG_FILE")"
+if "$REPO_DIR/aca-environment.sh" --config "$CONFIG_FILE" publish \
+    --scaling-mode invalid >/dev/null 2>&1; then
+    echo 'publish accepted an invalid scaling mode' >&2
+    exit 1
+fi
+test "$config_hash" = "$(sha256sum "$CONFIG_FILE")"
+if "$REPO_DIR/aca-environment.sh" --config "$CONFIG_FILE" publish \
+    --scaling-mode disabled --cooldown-period 60 >/dev/null 2>&1; then
+    echo 'publish accepted cooldown with disabled scaling' >&2
+    exit 1
+fi
+test "$config_hash" = "$(sha256sum "$CONFIG_FILE")"
 
 "$REPO_DIR/aca-environment.sh" --config "$CONFIG_FILE" create >/dev/null
 "$REPO_DIR/aca-environment.sh" --config "$CONFIG_FILE" create >/dev/null
@@ -74,6 +99,34 @@ test "$(grep -c '^acr create ' "$MOCK_LOG")" = 1
 test "$(grep -c '^identity create ' "$MOCK_LOG")" = 1
 test "$(grep -c '^storage account create ' "$MOCK_LOG")" = 1
 test "$(grep -c '^containerapp env create ' "$MOCK_LOG")" = 1
+
+mkdir -p "$TEST_DIR/publish-repo/src"
+cp "$REPO_DIR/aca-environment.sh" "$TEST_DIR/publish-repo/aca-environment.sh"
+cat > "$TEST_DIR/publish-repo/build-pod.sh" <<'EOF'
+#!/bin/bash
+[ "${MOCK_PUBLISH_BUILD_FAILURE:-false}" != true ]
+EOF
+cat > "$TEST_DIR/publish-repo/verify-defaults.sh" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+chmod +x "$TEST_DIR/publish-repo/aca-environment.sh" \
+    "$TEST_DIR/publish-repo/build-pod.sh" "$TEST_DIR/publish-repo/verify-defaults.sh"
+"$TEST_DIR/publish-repo/aca-environment.sh" --config "$CONFIG_FILE" publish \
+    --scaling-mode enabled --min-replicas 0 --cooldown-period 7200 >/dev/null
+grep -q '^SCALING_MODE=enabled$' "$CONFIG_FILE"
+grep -q '^SCALING_MIN_REPLICAS=0$' "$CONFIG_FILE"
+grep -q '^SCALING_COOLDOWN_PERIOD=7200$' "$CONFIG_FILE"
+test "$(stat -c '%a' "$CONFIG_FILE")" = 600
+config_hash="$(sha256sum "$CONFIG_FILE")"
+export MOCK_PUBLISH_BUILD_FAILURE=true
+if "$TEST_DIR/publish-repo/aca-environment.sh" --config "$CONFIG_FILE" publish \
+    --scaling-mode disabled >/dev/null 2>&1; then
+    echo 'publish ignored a build failure' >&2
+    exit 1
+fi
+unset MOCK_PUBLISH_BUILD_FAILURE
+test "$config_hash" = "$(sha256sum "$CONFIG_FILE")"
 
 mkdir -p "$HOME/.azure/code-server-aca/instances/alice"
 printf 'secret\n' > "$HOME/.azure/code-server-aca/instances/alice/password"

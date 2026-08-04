@@ -14,8 +14,9 @@ description: 検証済み code-server image を ACR へ publish し、Running・
 ## Release Workflow
 
 1. `./aca-environment.sh publish` で image を build して ACR に push し、一意な tag と digest を記録する。初回の大きな pull/push は数分かかり得るため、処理中に同じ command を重複実行しない。
-2. 最初の instance だけを新 image へ更新する。
-3. revision が正常になったこと、正しい password と誤った password の HTTP 応答、既存 marker、設定、拡張機能を確認する。
+2. 最初の instance だけを目標image・resource・scaling設定へ更新する。
+3. revisionが正常で目標CPU・memoryが反映されたこと、正しいpasswordと誤ったpasswordの
+   HTTP応答、既存marker、設定、拡張機能を確認する。
 4. 最初の instance が合格した後でのみ次の instance を更新し、同じ検証を繰り返す。
 5. 全 instance が新 digest で正常動作してから、不要な旧 ACR image の削除を検討する。
 6. build でローカルコンテナが停止した場合は、必要に応じて `./start-pod.sh 1` で復旧する。
@@ -33,6 +34,7 @@ Stopped の instance は update を受け付けない。対象に含める場合
 ## Completion Criteria
 
 - 対象 instance が同一の意図した image digest を参照する。
+- 対象 instance のCPU・memoryとscaling設定が外部configの目標値に一致する。
 - 更新対象外の Stopped instance が参照する旧 image を ACR に保持する。
 - 各 instance の認証分離と永続データが維持される。
 - 実 URL、password、subscription 情報などの一時値を tracked docs に残さない。

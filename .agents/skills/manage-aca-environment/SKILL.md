@@ -13,6 +13,8 @@ description: code-server 用 Azure Container Apps 共有基盤の初期化、作
 4. 設定がまだ無い場合だけ `./aca-environment.sh init` を使う。生成される秘密情報を含む設定はリポジトリ外の既定パスに保持する。
 5. 共有基盤の作成には `./aca-environment.sh create` を使い、再実行可能性を維持する。
 6. 作成後に resource group、ACR、Container Apps environment、Azure Files storage、必須 tag を確認する。
+7. `publish`でスケーリング設定を選ぶ場合は明示オプションを使用する。設定は外部configへ
+   保存されるだけでAppは変更されず、利用者別の`update`で順次反映される。
 
 ## Destructive Operations
 

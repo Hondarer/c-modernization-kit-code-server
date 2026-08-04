@@ -21,7 +21,9 @@ Usage: ./aca-instance.sh [--config FILE] COMMAND [INSTANCE]
 
 Commands:
   doctor                     Validate CLI access and shared Azure resources
-  create INSTANCE            Create one persistent instance
+  create INSTANCE [--scaling-mode disabled|enabled]
+                  [--min-replicas 0|1] [--cooldown-period SECONDS]
+                             Create one persistent instance
   update INSTANCE            Deploy the configured image to one instance
   suspend INSTANCE           Stop compute while keeping data and configuration
   resume INSTANCE            Start a suspended instance and verify its health
@@ -76,6 +78,11 @@ FILE_SHARE_PREFIX="${FILE_SHARE_PREFIX:-code-server}"
 ENV_STORAGE_PREFIX="${ENV_STORAGE_PREFIX:-code-server}"
 PASSWORD_DIR="${PASSWORD_DIR:-${HOME}/.azure/code-server-aca/instances}"
 FILE_SHARE_QUOTA_GIB="${FILE_SHARE_QUOTA_GIB:-10}"
+CONTAINER_APP_CPU="${CONTAINER_APP_CPU:-4.0}"
+CONTAINER_APP_MEMORY="${CONTAINER_APP_MEMORY:-8Gi}"
+SCALING_MODE="${SCALING_MODE:-disabled}"
+SCALING_MIN_REPLICAS="${SCALING_MIN_REPLICAS:-0}"
+SCALING_COOLDOWN_PERIOD="${SCALING_COOLDOWN_PERIOD:-3600}"
 CONTAINER_APP_LIFECYCLE_API_VERSION="2025-07-01"
 LIFECYCLE_WAIT_ATTEMPTS=60
 LIFECYCLE_WAIT_INTERVAL_SECONDS=5
@@ -87,6 +94,70 @@ JOB_WAIT_INTERVAL_SECONDS=15
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+validate_container_app_resources() {
+    local cpu="$1" memory="$2"
+    case "${cpu}:${memory}" in
+        0.25:0.5Gi|0.5:1Gi|0.75:1.5Gi|1.0:2Gi|1.25:2.5Gi|1.5:3Gi|1.75:3.5Gi|\
+        2.0:4Gi|2.25:4.5Gi|2.5:5Gi|2.75:5.5Gi|3.0:6Gi|3.25:6.5Gi|3.5:7Gi|\
+        3.75:7.5Gi|4.0:8Gi) ;;
+        *)
+            die "Invalid Container App resources '${cpu} / ${memory}'; use a Consumption CPU/memory pair from 0.25/0.5Gi through 4.0/8Gi."
+            ;;
+    esac
+}
+
+validate_scaling_values() {
+    local mode="$1" min_replicas="$2" cooldown_period="$3"
+    case "$mode" in
+        disabled|enabled) ;;
+        *) die "Invalid scaling mode '${mode}'; use disabled or enabled." ;;
+    esac
+    case "$min_replicas" in
+        0|1) ;;
+        *) die "Invalid min replicas '${min_replicas}'; use 0 or 1." ;;
+    esac
+    [[ "$cooldown_period" =~ ^[0-9]+$ ]] && [ "$cooldown_period" -le 2147483647 ] ||
+        die "Invalid cooldown period '${cooldown_period}'; use 0-2147483647 seconds."
+}
+
+set_desired_scaling() {
+    validate_scaling_values "$1" "$2" "$3"
+    DESIRED_SCALING_MODE="$1"
+    if [ "$DESIRED_SCALING_MODE" = enabled ]; then
+        DESIRED_MIN_REPLICAS="$2"
+        DESIRED_COOLDOWN_PERIOD="$3"
+        DESIRED_SCALE_RULES='[{"name":"code-server-http","http":{"metadata":{"concurrentRequests":"10"}}}]'
+        [ "$DESIRED_MIN_REPLICAS" != 1 ] ||
+            warn "Scaling is enabled with min replicas 1; the App will not scale to zero."
+    else
+        DESIRED_MIN_REPLICAS=1
+        DESIRED_COOLDOWN_PERIOD=null
+        DESIRED_SCALE_RULES='[]'
+    fi
+}
+
+render_app_yaml() {
+    local output_file="$1"
+    sed \
+        -e "s|__IDENTITY_ID__|${IDENTITY_ID}|g" \
+        -e "s|__LOCATION__|${LOCATION}|g" \
+        -e "s|__APP_NAME__|${APP_NAME}|g" \
+        -e "s|__RESOURCE_GROUP__|${RESOURCE_GROUP}|g" \
+        -e "s|__ENVIRONMENT_ID__|${ENVIRONMENT_ID}|g" \
+        -e "s|__ACR_LOGIN_SERVER__|${ACR_LOGIN_SERVER}|g" \
+        -e "s|__REMOTE_IMAGE__|${REMOTE_IMAGE}|g" \
+        -e "s|__ENV_STORAGE_NAME__|${ENV_STORAGE_NAME}|g" \
+        -e "s|__CONTAINER_APP_CPU__|${CONTAINER_APP_CPU}|g" \
+        -e "s|__CONTAINER_APP_MEMORY__|${CONTAINER_APP_MEMORY}|g" \
+        -e "s|__MIN_REPLICAS__|${DESIRED_MIN_REPLICAS}|g" \
+        -e "s|__COOLDOWN_PERIOD__|${DESIRED_COOLDOWN_PERIOD}|g" \
+        -e "s|__SCALE_RULES__|${DESIRED_SCALE_RULES}|g" \
+        "$TEMPLATE_FILE" > "$output_file"
+    if grep -qE '__[A-Z_]+__' "$output_file"; then
+        die "Unresolved placeholder in rendered YAML: ${output_file}"
+    fi
 }
 
 validate_slug() {
@@ -355,8 +426,11 @@ doctor() {
 
 create_instance() {
     local password storage_key rendered_yaml fqdn app_exists=false
-    local existing_storage existing_min existing_max existing_image
+    local existing_storage existing_min existing_max existing_image existing_cooldown existing_rule
+    local existing_cpu existing_memory
     set_instance_vars "$1"
+    validate_container_app_resources "$CONTAINER_APP_CPU" "$CONTAINER_APP_MEMORY"
+    set_desired_scaling "$2" "$3" "$4"
     require_command az
     require_command openssl
     require_command sed
@@ -374,6 +448,14 @@ create_instance() {
             --query 'properties.template.scale.minReplicas' -o tsv)"
         existing_max="$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
             --query 'properties.template.scale.maxReplicas' -o tsv)"
+        existing_cooldown="$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+            --query 'properties.template.scale.cooldownPeriod' -o tsv)"
+        existing_rule="$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+            --query 'properties.template.scale.rules[0].name' -o tsv)"
+        existing_cpu="$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+            --query 'properties.template.containers[0].resources.cpu' -o tsv)"
+        existing_memory="$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+            --query 'properties.template.containers[0].resources.memory' -o tsv)"
         existing_image="$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
             --query 'properties.template.containers[0].image' -o tsv)"
         [ "$existing_image" = "$REMOTE_IMAGE" ] ||
@@ -382,7 +464,14 @@ create_instance() {
             die "${APP_NAME} uses unexpected storage: ${existing_storage}"
         fi
         if [ "$existing_storage" = "$ENV_STORAGE_NAME" ] &&
-            [ "$existing_min" = "1" ] && [ "$existing_max" = "1" ]; then
+            [ "$existing_cpu" = "$CONTAINER_APP_CPU" ] &&
+            [ "$existing_memory" = "$CONTAINER_APP_MEMORY" ] && [ "$existing_max" = 1 ] &&
+            { { [ "$DESIRED_SCALING_MODE" = disabled ] && [ "$existing_min" = 1 ] &&
+                [ -z "$existing_rule" ]; } ||
+              { [ "$DESIRED_SCALING_MODE" = enabled ] &&
+                [ "$existing_min" = "$DESIRED_MIN_REPLICAS" ] &&
+                [ "$existing_cooldown" = "$DESIRED_COOLDOWN_PERIOD" ] &&
+                [ "$existing_rule" = code-server-http ]; }; }; then
             echo "Instance already exists; validating the recorded pair." >&2
             tag_app
             fqdn="$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
@@ -390,6 +479,9 @@ create_instance() {
             wait_for_health "$fqdn"
             show_pair
             return
+        fi
+        if [ "$existing_storage" = "$ENV_STORAGE_NAME" ]; then
+            die "${APP_NAME} configuration differs from the requested resources or scaling; run './aca-instance.sh update ${INSTANCE_SLUG}'."
         fi
         echo "Resuming incomplete instance ${INSTANCE_SLUG}." >&2
     else
@@ -432,19 +524,7 @@ create_instance() {
 
     rendered_yaml="$(mktemp "/tmp/${APP_NAME}.XXXXXX.yaml")"
     trap 'rm -f "${rendered_yaml:-}"' RETURN
-    sed \
-        -e "s|__IDENTITY_ID__|${IDENTITY_ID}|g" \
-        -e "s|__LOCATION__|${LOCATION}|g" \
-        -e "s|__APP_NAME__|${APP_NAME}|g" \
-        -e "s|__RESOURCE_GROUP__|${RESOURCE_GROUP}|g" \
-        -e "s|__ENVIRONMENT_ID__|${ENVIRONMENT_ID}|g" \
-        -e "s|__ACR_LOGIN_SERVER__|${ACR_LOGIN_SERVER}|g" \
-        -e "s|__REMOTE_IMAGE__|${REMOTE_IMAGE}|g" \
-        -e "s|__ENV_STORAGE_NAME__|${ENV_STORAGE_NAME}|g" \
-        "$TEMPLATE_FILE" > "$rendered_yaml"
-    if grep -qE '__[A-Z_]+__' "$rendered_yaml"; then
-        die "Unresolved placeholder in rendered YAML: ${rendered_yaml}"
-    fi
+    render_app_yaml "$rendered_yaml"
     az containerapp update -g "$RESOURCE_GROUP" -n "$APP_NAME" --yaml "$rendered_yaml" -o none
     tag_app
     az containerapp revision set-mode -g "$RESOURCE_GROUP" -n "$APP_NAME" --mode single -o none
@@ -457,16 +537,20 @@ create_instance() {
 }
 
 update_instance() {
-    local fqdn
+    local fqdn rendered_yaml
     set_instance_vars "$1"
+    validate_container_app_resources "$CONTAINER_APP_CPU" "$CONTAINER_APP_MEMORY"
     require_command az
     require_command curl
     az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" >/dev/null
     require_running_instance update
     [ -s "$PASSWORD_FILE" ] || die "Password file not found: ${PASSWORD_FILE}"
     load_shared_values
-    az containerapp update -g "$RESOURCE_GROUP" -n "$APP_NAME" \
-        --image "$REMOTE_IMAGE" -o none
+    set_desired_scaling "$SCALING_MODE" "$SCALING_MIN_REPLICAS" "$SCALING_COOLDOWN_PERIOD"
+    rendered_yaml="$(mktemp "/tmp/${APP_NAME}.XXXXXX.yaml")"
+    trap 'rm -f "${rendered_yaml:-}"' RETURN
+    render_app_yaml "$rendered_yaml"
+    az containerapp update -g "$RESOURCE_GROUP" -n "$APP_NAME" --yaml "$rendered_yaml" -o none
     tag_app
     az containerapp revision set-mode -g "$RESOURCE_GROUP" -n "$APP_NAME" --mode single -o none
     fqdn="$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
@@ -538,9 +622,10 @@ resume_instance() {
 }
 
 list_instances() {
-    local name fqdn provisioning running slug password_file password
-    printf 'INSTANCE\tURL\tPASSWORD\tPROVISIONING\tRUNNING\n'
-    while IFS=$'\t' read -r name fqdn provisioning running; do
+    local name fqdn provisioning running min_replicas max_replicas cooldown rule
+    local slug password_file password scaling replicas
+    printf 'INSTANCE\tURL\tPASSWORD\tPROVISIONING\tRUNNING\tSCALING\tMIN\tMAX\tCOOLDOWN\tREPLICAS\n'
+    while IFS=$'\t' read -r name fqdn provisioning running min_replicas max_replicas cooldown rule; do
         [ -n "$name" ] || continue
         case "$name" in
             "${APP_NAME_PREFIX}-"*) ;;
@@ -556,10 +641,34 @@ list_instances() {
         [ ! -s "$password_file" ] || password="$(sed -n '1p' "$password_file")"
         provisioning="${provisioning:-Unknown}"
         running="${running:-Unknown}"
-        printf '%s\thttps://%s/\t%s\t%s\t%s\n' \
-            "$slug" "$fqdn" "$password" "$provisioning" "$running"
+        min_replicas="${min_replicas:-Unknown}"
+        max_replicas="${max_replicas:-Unknown}"
+        case "$rule" in
+            code-server-http)
+                scaling=Enabled
+                cooldown="${cooldown:-Unknown}"
+                ;;
+            ''|-|None|null)
+                if [ "$min_replicas" = 1 ] && [ "$max_replicas" = 1 ]; then
+                    scaling=Disabled
+                    cooldown=-
+                else
+                    scaling=Custom
+                    cooldown="${cooldown:-Unknown}"
+                fi
+                ;;
+            *) scaling=Custom; cooldown="${cooldown:-Unknown}" ;;
+        esac
+        replicas="$(az containerapp replica list -g "$RESOURCE_GROUP" -n "$name" \
+            --query 'length(@)' -o tsv 2>/dev/null || true)"
+        if [ -z "$replicas" ]; then
+            [ "$running" = Stopped ] && replicas=0 || replicas=Unknown
+        fi
+        printf '%s\thttps://%s/\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$slug" "$fqdn" "$password" "$provisioning" "$running" "$scaling" \
+            "$min_replicas" "$max_replicas" "$cooldown" "$replicas"
     done < <(az containerapp list -g "$RESOURCE_GROUP" \
-        --query '[].{name:name,fqdn:properties.configuration.ingress.fqdn,provisioning:properties.provisioningState,running:properties.runningStatus}' \
+        --query "[].{name:name,fqdn:properties.configuration.ingress.fqdn,provisioning:properties.provisioningState,running:properties.runningStatus,min:not_null(properties.template.scale.minReplicas, '-'),max:not_null(properties.template.scale.maxReplicas, '-'),cooldown:not_null(properties.template.scale.cooldownPeriod, '-'),rule:not_null(properties.template.scale.rules[0].name, '-')}" \
         -o tsv)
 }
 
@@ -735,8 +844,42 @@ case "$COMMAND" in
         doctor
         ;;
     create)
-        [ "$#" -eq 1 ] || die "create requires exactly one instance slug."
-        create_instance "$1"
+        [ "$#" -ge 1 ] || die "create requires an instance slug."
+        instance_slug="$1"
+        shift
+        create_mode="$SCALING_MODE"
+        create_min="$SCALING_MIN_REPLICAS"
+        create_cooldown="$SCALING_COOLDOWN_PERIOD"
+        create_min_was_set=false
+        create_cooldown_was_set=false
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                --scaling-mode)
+                    [ "$#" -ge 2 ] || die "--scaling-mode requires disabled or enabled."
+                    create_mode="$2"
+                    shift 2
+                    ;;
+                --min-replicas)
+                    [ "$#" -ge 2 ] || die "--min-replicas requires 0 or 1."
+                    create_min="$2"
+                    create_min_was_set=true
+                    shift 2
+                    ;;
+                --cooldown-period)
+                    [ "$#" -ge 2 ] || die "--cooldown-period requires seconds."
+                    create_cooldown="$2"
+                    create_cooldown_was_set=true
+                    shift 2
+                    ;;
+                *) die "Unknown create option: $1" ;;
+            esac
+        done
+        validate_scaling_values "$create_mode" "$create_min" "$create_cooldown"
+        if [ "$create_mode" = disabled ] &&
+            { [ "$create_min_was_set" = true ] || [ "$create_cooldown_was_set" = true ]; }; then
+            die "--min-replicas and --cooldown-period require --scaling-mode enabled."
+        fi
+        create_instance "$instance_slug" "$create_mode" "$create_min" "$create_cooldown"
         ;;
     update)
         [ "$#" -eq 1 ] || die "update requires exactly one instance slug."

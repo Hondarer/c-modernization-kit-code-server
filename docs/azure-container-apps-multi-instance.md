@@ -41,7 +41,8 @@ AZURE_CORE_ONLY_SHOW_ERRORS=false ./aca-instance.sh doctor
 
 ```bash
 ./aca-instance.sh create alice
-./aca-instance.sh create bob
+./aca-instance.sh create bob --scaling-mode enabled \
+    --min-replicas 0 --cooldown-period 3600
 ```
 
 `create`は次を冪等に実行します。
@@ -51,8 +52,13 @@ AZURE_CORE_ONLY_SHOW_ERRORS=false ./aca-instance.sh doctor
 3. Container Apps Environmentへ個別ストレージを登録する。
 4. 専用のinit Jobを実行し、`home`へ既定設定・拡張機能を事前に導入する(後述)。
 5. App固有SecretとHTTPS ingressを持つContainer Appを作成する。
-6. Single revision、`min=1`、`max=1`へ設定する。
+6. Single revision、`max=1`と、選択した固定またはHTTPスケーリング設定を適用する。
 7. `/healthz`成功後にURLとパスワードを表示する。
+
+code-server Appは外部configの`CONTAINER_APP_CPU`と`CONTAINER_APP_MEMORY`を使用し、
+未指定時は1 replicaあたり`4.0 vCPU / 8Gi`です。Consumption profileで利用できる
+`0.25/0.5Gi`から`4.0/8Gi`までの1:2の組み合わせを指定できます。既定設定・拡張機能を
+事前導入するinit JobはAzure Files I/Oが主な律速であるため`1.0 vCPU / 2Gi`を維持します。
 
 既存Appがあるのにローカルパスワードファイルがない場合は、Secretを上書きせずエラーに
 します。
@@ -68,7 +74,14 @@ AZURE_CORE_ONLY_SHOW_ERRORS=false ./aca-instance.sh doctor
 した端末では実行しないでください。
 
 出力の`PROVISIONING`列はAzureリソースの作成・更新状態、`RUNNING`列はAppの実行状態を
-表します。通常の稼働状態は`Succeeded / Running`、休止状態は`Succeeded / Stopped`です。
+表します。`SCALING`、`MIN`、`MAX`、`COOLDOWN`は実際のApp設定、`REPLICAS`は現在の
+replica数です。通常の稼働状態は`Succeeded / Running`、休止状態は`Succeeded / Stopped`
+です。スケーリング有効時の`Running / 0 replicas`はscale-to-zeroであり、明示的な休止では
+ありません。
+
+スケーリング無効時は`min=1/max=1`です。有効時は名前付きHTTP rule、指定したmin、固定
+`max=1`、cooldownを使用します。minの既定は0、cooldownの既定は3600秒です。`min=1`も
+指定できますが、その場合はscale-to-zeroしません。
 
 ## ライフサイクルと受付可能な操作
 
@@ -137,7 +150,7 @@ stateDiagram-v2
 `az containerapp job start`で実行しますが、これはAppのRunning/Stopped遷移をJobで代替する
 ものではありません。
 
-suspend中もURL、Secret、Azure Files Share、`min=1` / `max=1`の設定は維持されます。
+suspend中もURL、Secret、Azure Files Share、スケーリング設定は維持されます。
 レプリカが0の間はContainer Appsのリソース消費課金は発生しませんが、ACRの日次料金、
 Azure Filesの保存データ・トランザクション、Log Analyticsの取り込み・保持など、共有
 リソースの料金は継続し得ます。
@@ -206,7 +219,8 @@ Stoppedのままなので、エラー原因を解消して同じ`reset`を再実
 
 ## イメージ更新
 
-`aca-environment.sh publish`後、対象Appを更新します。
+`aca-environment.sh publish`後、対象Appを更新します。外部configのCPU・memoryと、publishで
+保存したスケーリング設定もこのupdateで適用され、create時の個別指定より優先されます。
 
 ```bash
 ./aca-instance.sh update alice
@@ -235,7 +249,8 @@ Revisionを再起動します。
 - 各パスワードでは対応するAppだけにログインできる。
 - `/home/user`と`/workspace`が相互に分離される。
 - Revision再起動後も設定とファイルが保持される。
-- 各AppがSingle revision、`min=1`、`max=1`である。
+- 各AppがSingle revision、`max=1`であり、選択したmin、cooldown、HTTP ruleが反映される。
+- 各AppのCPU・memoryが外部configの目標値と一致し、init Jobは`1.0 vCPU / 2Gi`である。
 - 稼働対象は`Succeeded / Running`、休止対象は`Succeeded / Stopped`である。
 
 認証をCLIで確認する場合、正しいパスワードを`/login`へPOSTすると302になります。
@@ -267,6 +282,7 @@ AzureのスラッグはローカルPodmanのインスタンス番号から独立
 
 ## 参考資料
 
+- [Azure Container Appsのスケーリング](https://learn.microsoft.com/azure/container-apps/scale-app)
 - [Container Apps - Start REST API](https://learn.microsoft.com/rest/api/resource-manager/containerapps/container-apps/start?view=rest-resource-manager-containerapps-2025-07-01)
 - [Container Apps - Stop REST API](https://learn.microsoft.com/rest/api/resource-manager/containerapps/container-apps/stop?view=rest-resource-manager-containerapps-2025-07-01)
 - [Azure Container Appsの課金](https://learn.microsoft.com/azure/container-apps/billing)
