@@ -1,4 +1,4 @@
-# c-modernization-kit-code-server Agent Guide
+# code-server-container Agent Guide
 
 ## Source of truth
 

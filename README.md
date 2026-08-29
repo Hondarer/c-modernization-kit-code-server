@@ -1,9 +1,9 @@
-# c-modernization-kit-code-server
+# code-server-container
 
 [oracle-linux-container](https://github.com/hondarer/oracle-linux-container)のOracle Linux 8
-開発環境へ、ブラウザから利用できる[code-server](https://github.com/coder/code-server)を
-追加します。rootless Podmanによるローカル実行と、利用者ごとに分離したAzure Container
-Apps環境をサポートします。
+開発環境を、ブラウザから利用できる[code-server](https://github.com/coder/code-server)
+コンテナとして提供します。rootless Podmanによるローカル実行と、利用者ごとに分離した
+Azure Container Apps環境をサポートします。
 
 ## 構成
 
